@@ -1,0 +1,44 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* The surface the machine sits on. */
+html,
+body {
+  background: #3b3730;
+  margin: 0;
+  padding: 0;
+  -webkit-font-smoothing: none;
+  font-smooth: never;
+}
+
+/* Crisp 1-bit rendering — no anti-aliased edges on the patterns. */
+.crt,
+.crt * {
+  image-rendering: pixelated;
+}
+
+/* Visible keyboard focus everywhere, drawn in-bit inside the screen. */
+:focus-visible {
+  outline: 2px solid #000;
+  outline-offset: 1px;
+}
+.crt :focus-visible {
+  outline: 2px dotted #000;
+  outline-offset: -3px;
+}
+
+/* Respect reduced motion. The app has almost no motion, but honor it. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* Silkscreen never renders below 8px; enforce a floor. */
+.chrome-label {
+  font-size: 8px;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
+}
