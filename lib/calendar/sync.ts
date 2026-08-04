@@ -23,7 +23,7 @@ import {
 import { effectiveType } from "../types";
 
 export interface DiffLine {
-  kind: "new" | "moved" | "expired";
+  kind: "new" | "moved" | "expired" | "cancelled";
   blockId: string;
   label: string;
 }
@@ -32,6 +32,7 @@ export interface SyncDiff {
   created: DiffLine[];
   moved: DiffLine[];
   expired: DiffLine[]; // Sprint blocks past their season end
+  cancelled: DiffLine[]; // blocks removed from the plan — their event goes too
   untouchedCount: number; // existing calendar events left alone — the blast-radius reassurance
 }
 
@@ -106,11 +107,30 @@ export function computeDiff(
     }
   }
 
+  // Cancelled: events this app created whose block is no longer in the plan.
+  // Without this, deleting a block would orphan its calendar event forever.
+  // These are all app-owned, so removing them stays inside the ownership rule.
+  const liveBlockIds = new Set(blocks.map((b) => b.id));
+  const cancelled: DiffLine[] = [];
+  for (const ev of existingOwned) {
+    // isOwnedByApp, not just "has a plannerBlockId" — an event carrying a
+    // partial or forged tag is NOT ours and must never be listed for deletion.
+    if (!isOwnedByApp(ev)) continue;
+    const bid = ev.extendedProperties?.private?.plannerBlockId;
+    if (bid && !liveBlockIds.has(bid)) {
+      cancelled.push({
+        kind: "cancelled",
+        blockId: bid,
+        label: ev.summary ?? "Planned block",
+      });
+    }
+  }
+
   // Untouched: external events that are NOT owned by the app. These are never
   // written. Showing the count bounds the blast radius.
   const untouchedCount = allExternal.filter((e) => !e.ownedByApp).length;
 
-  return { created, moved, expired, untouchedCount };
+  return { created, moved, expired, cancelled, untouchedCount };
 }
 
 // A description of a single write the commit step will perform. Includes the
@@ -198,6 +218,19 @@ export function buildWriteOps(
         gcalEventId: assertOwned(existing),
         event,
       });
+    }
+  }
+
+  // Delete events whose block is gone from the plan. assertOwned still gates
+  // every one of these — an untagged event can never reach this path.
+  const liveBlockIds = new Set(blocks.map((b) => b.id));
+  for (const ev of existingOwned) {
+    // Skip anything not ours BEFORE assertOwned, so a stray untagged event in
+    // the input can't abort the whole sync. assertOwned still gates the write.
+    if (!isOwnedByApp(ev)) continue;
+    const bid = ev.extendedProperties?.private?.plannerBlockId;
+    if (bid && !liveBlockIds.has(bid)) {
+      ops.push({ op: "delete", blockId: bid, gcalEventId: assertOwned(ev) });
     }
   }
 

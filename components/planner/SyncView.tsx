@@ -17,7 +17,11 @@ export function SyncView() {
   const diff = store.syncDiff;
   const [justSynced, setJustSynced] = useState(false);
 
-  const total = diff.created.length + diff.moved.length + diff.expired.length;
+  const total =
+    diff.created.length +
+    diff.moved.length +
+    diff.expired.length +
+    diff.cancelled.length;
   const openCount = store.weekBlocks.filter((b) => b.type === "open").length;
 
   function commit() {
@@ -53,6 +57,11 @@ export function SyncView() {
               lines={diff.created}
             />
             <DiffSection sign="~" label={`${diff.moved.length} moved`} lines={diff.moved} />
+            <DiffSection
+              sign="−"
+              label={`${diff.cancelled.length} cancelled (removed from your week)`}
+              lines={diff.cancelled}
+            />
             <DiffSection
               sign="−"
               label={`${diff.expired.length} expired (Sprint season ended)`}
@@ -130,6 +139,8 @@ function DiffSection({
         </span>
       </div>
       {shown.map((l) => {
+        // Cancelled lines point at blocks that are already gone, so this
+        // lookup is expected to miss for them.
         const block = store.weekBlocks.find((b) => b.id === l.blockId);
         const area = block
           ? store.areas.find((a) => a.id === block.area_id)

@@ -88,6 +88,15 @@ function outsideWeek(blocks: PlannedBlock[], weekStart: string): PlannedBlock[] 
   return blocks.filter((b) => b.date < weekStart || b.date >= end);
 }
 
+/** An event this app has written to the calendar. Tracked separately from
+ *  blocks so that deleting a block still leaves a record to clean up — that
+ *  is what makes "cancel my X" actually remove it from the calendar. */
+interface SyncedEvent {
+  gcalEventId: string;
+  blockId: string;
+  summary: string;
+}
+
 interface State {
   areas: Area[];
   blocks: PlannedBlock[];
@@ -98,6 +107,7 @@ interface State {
   armedAreaId: string | null;
   selectedBlockId: string | null;
   lastSyncedAt: string | null;
+  syncedEvents: SyncedEvent[];
 }
 
 type Action =
@@ -195,6 +205,7 @@ function makeInitial(): State {
     armedAreaId: null,
     selectedBlockId: null,
     lastSyncedAt: null,
+    syncedEvents: [],
   };
 }
 
@@ -449,36 +460,59 @@ function reducer(state: State, action: Action): State {
     case "updateSettings":
       return { ...state, settings: { ...state.settings, ...action.patch } };
     case "syncCommit": {
-      // Demo-mode commit: apply the confirmed diff locally. Blocks that would
-      // be written get a simulated event id and flip to synced; expired
-      // sprint events are removed from the "calendar". The real transport
-      // (lib/calendar/sync.ts buildWriteOps + CalendarClient) replaces the id
-      // assignment when Google is connected — the policy code is identical.
+      // Demo-mode commit: apply the confirmed diff locally. The policy that
+      // decides WHAT gets written lives in lib/calendar/sync.ts and is shared
+      // with the real transport; only the id assignment is simulated here.
       const today = localISODate(new Date());
+      const live = new Set(state.blocks.map((b) => b.id));
+      let synced = [...state.syncedEvents];
+
+      // Drop records whose block is gone, or whose sprint season has ended —
+      // these are the deletions the diff showed as "cancelled"/"expired".
+      synced = synced.filter((se) => {
+        if (!live.has(se.blockId)) return false;
+        const b = state.blocks.find((x) => x.id === se.blockId)!;
+        const area = state.areas.find((a) => a.id === b.area_id);
+        if (!area) return false;
+        const type = b.type ?? area.default_type;
+        if (type === "open") return false;
+        if (type === "sprint" && area.season_end_date && b.date > area.season_end_date) {
+          return false;
+        }
+        return true;
+      });
+
+      const blocks = state.blocks.map((b) => {
+        const area = state.areas.find((a) => a.id === b.area_id);
+        if (!area) return b;
+        const type = b.type ?? area.default_type;
+        if (type === "open") return b; // Open never syncs.
+        const expired =
+          type === "sprint" && area.season_end_date && b.date > area.season_end_date;
+        if (expired) {
+          return b.gcal_event_id
+            ? { ...b, gcal_event_id: null, sync_state: "synced" as const }
+            : b;
+        }
+        if (b.sync_state === "unsynced") {
+          const gcalEventId = b.gcal_event_id ?? `demo-gcal-${b.id}`;
+          if (!synced.some((se) => se.gcalEventId === gcalEventId)) {
+            synced.push({
+              gcalEventId,
+              blockId: b.id,
+              summary: b.label ?? area.name,
+            });
+          }
+          return { ...b, gcal_event_id: gcalEventId, sync_state: "synced" as const };
+        }
+        return b;
+      });
+
       return {
         ...state,
         lastSyncedAt: new Date().toISOString(),
-        blocks: state.blocks.map((b) => {
-          const area = state.areas.find((a) => a.id === b.area_id);
-          if (!area) return b;
-          const type = b.type ?? area.default_type;
-          if (type === "open") return b; // Open never syncs.
-          const expired =
-            type === "sprint" && area.season_end_date && b.date > area.season_end_date;
-          if (expired) {
-            return b.gcal_event_id
-              ? { ...b, gcal_event_id: null, sync_state: "synced" as const }
-              : b;
-          }
-          if (b.sync_state === "unsynced") {
-            return {
-              ...b,
-              gcal_event_id: b.gcal_event_id ?? `demo-gcal-${b.id}`,
-              sync_state: "synced" as const,
-            };
-          }
-          return b;
-        }),
+        blocks,
+        syncedEvents: synced,
       };
     }
     default:
@@ -496,6 +530,7 @@ interface PersistedState {
   settings: UserSettings;
   weekStart: string;
   lastSyncedAt: string | null;
+  syncedEvents: SyncedEvent[];
 }
 
 function loadPersisted(): Partial<State> | null {
@@ -512,6 +547,7 @@ function loadPersisted(): Partial<State> | null {
       settings: data.settings,
       weekStart: data.weekStart,
       lastSyncedAt: data.lastSyncedAt ?? null,
+      syncedEvents: Array.isArray(data.syncedEvents) ? data.syncedEvents : [],
     };
   } catch {
     return null;
@@ -570,6 +606,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         settings: state.settings,
         weekStart: state.weekStart,
         lastSyncedAt: state.lastSyncedAt,
+        syncedEvents: state.syncedEvents,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(persist));
     } catch {
@@ -583,6 +620,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     state.settings,
     state.weekStart,
     state.lastSyncedAt,
+    state.syncedEvents,
   ]);
 
   const weekBlocks = useMemo(
@@ -612,12 +650,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   // The dry-run diff, computed live off the SAME policy module the real
   // transport uses. "Owned" events are reconstructed from synced blocks.
   const syncDiff = useMemo(() => {
-    const existingOwned: GCalEvent[] = weekBlocks
-      .filter((b) => b.gcal_event_id)
-      .map((b) => ({
-        id: b.gcal_event_id!,
+    // Built from the record of what we've written, NOT from current blocks —
+    // otherwise a deleted block would take its calendar event off the books
+    // and the orphan would never be cleaned up.
+    const weekBlockIds = new Set(weekBlocks.map((b) => b.id));
+    const existingOwned: GCalEvent[] = state.syncedEvents
+      .filter(
+        (se) =>
+          weekBlockIds.has(se.blockId) ||
+          !state.blocks.some((b) => b.id === se.blockId)
+      )
+      .map((se) => ({
+        id: se.gcalEventId,
+        summary: se.summary,
         extendedProperties: {
-          private: { plannerApp: "weekmachine", plannerBlockId: b.id },
+          private: { plannerApp: "weekmachine", plannerBlockId: se.blockId },
         },
       }));
     return computeDiff(
@@ -627,7 +674,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       weekExternal,
       localISODate(new Date())
     );
-  }, [weekBlocks, state.areas, weekExternal]);
+  }, [weekBlocks, state.areas, weekExternal, state.syncedEvents, state.blocks]);
 
   const value: StoreValue = {
     ...state,

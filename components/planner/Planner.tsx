@@ -52,7 +52,8 @@ function PlannerInner() {
   const pendingSync =
     store.syncDiff.created.length +
     store.syncDiff.moved.length +
-    store.syncDiff.expired.length;
+    store.syncDiff.expired.length +
+    store.syncDiff.cancelled.length;
 
   const menu: MenuItem[] = [
     { key: "plan", label: "PLAN" },

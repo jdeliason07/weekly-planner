@@ -12,6 +12,7 @@ export const PLANNER_APP = "weekmachine";
 
 export interface GCalEvent {
   id: string;
+  summary?: string;
   extendedProperties?: {
     private?: Record<string, string>;
   };
