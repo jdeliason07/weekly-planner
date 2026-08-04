@@ -19,7 +19,7 @@ const TYPE_LABEL: Record<BlockType, string> = {
 
 export function SelectionBar() {
   const store = useStore();
-  const block = store.blocks.find((b) => b.id === store.selectedBlockId);
+  const block = store.weekBlocks.find((b) => b.id === store.selectedBlockId);
   const area = store.areas.find((a) => a.id === block?.area_id);
   const [label, setLabel] = useState("");
 

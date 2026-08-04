@@ -15,7 +15,7 @@ export function ReviewView() {
   const store = useStore();
 
   const rows = store.budget.perArea.map(({ area, placedHours }) => {
-    const doneHours = store.blocks
+    const doneHours = store.weekBlocks
       .filter((b) => b.area_id === area.id && b.completed_at)
       .reduce((s, b) => s + durationHours(b.start_time, b.end_time), 0);
     return { area, placedHours, doneHours };

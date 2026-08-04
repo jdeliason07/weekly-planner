@@ -70,6 +70,24 @@ function columnFromDateStr(weekStart: string, date: string): number {
   return Math.round((b - a) / 86_400_000);
 }
 
+function addDays(dateISO: string, days: number): string {
+  const d = new Date(dateISO + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return localISODate(d);
+}
+
+// Blocks live across many weeks (each carries its own date). These select the
+// week currently in view, so navigating weeks never disturbs the others.
+function inWeek(blocks: PlannedBlock[], weekStart: string): PlannedBlock[] {
+  const end = addDays(weekStart, 7);
+  return blocks.filter((b) => b.date >= weekStart && b.date < end);
+}
+
+function outsideWeek(blocks: PlannedBlock[], weekStart: string): PlannedBlock[] {
+  const end = addDays(weekStart, 7);
+  return blocks.filter((b) => b.date < weekStart || b.date >= end);
+}
+
 interface State {
   areas: Area[];
   blocks: PlannedBlock[];
@@ -95,6 +113,7 @@ type Action =
   | { t: "loadTemplate" }
   | { t: "saveToTemplate" }
   | { t: "clearWeek" }
+  | { t: "setWeekStart"; weekStart: string }
   | { t: "updateArea"; areaId: string; patch: Partial<Area> }
   | { t: "addArea"; name: string }
   | { t: "archiveArea"; areaId: string }
@@ -322,20 +341,30 @@ function reducer(state: State, action: Action): State {
       return { ...state, blocks };
     }
     case "loadTemplate": {
-      // Load the template into a week instance dated to the CURRENT week —
-      // the Sunday ritual. Never modifies the template.
-      const weekStart = currentWeekStart(state.settings.week_starts_on);
+      // Load the template into the week currently in view — the Sunday
+      // ritual. Never modifies the template, and never touches other weeks.
+      const fresh = instantiateTemplate(
+        state.template,
+        state.areas,
+        state.weekStart
+      );
       return {
         ...state,
-        weekStart,
-        blocks: instantiateTemplate(state.template, state.areas, weekStart),
+        blocks: [...outsideWeek(state.blocks, state.weekStart), ...fresh],
         selectedBlockId: null,
         armedAreaId: null,
       };
     }
+    case "setWeekStart":
+      return {
+        ...state,
+        weekStart: action.weekStart,
+        selectedBlockId: null,
+        armedAreaId: null,
+      };
     case "saveToTemplate": {
       // Explicit promotion: the current week's blocks become the template.
-      const template: TemplateBlock[] = state.blocks.map((b) => ({
+      const template: TemplateBlock[] = inWeek(state.blocks, state.weekStart).map((b) => ({
         id: uid("t"),
         user_id: SEED_USER,
         area_id: b.area_id,
@@ -348,7 +377,12 @@ function reducer(state: State, action: Action): State {
       return { ...state, template };
     }
     case "clearWeek":
-      return { ...state, blocks: [], selectedBlockId: null, armedAreaId: null };
+      return {
+        ...state,
+        blocks: outsideWeek(state.blocks, state.weekStart),
+        selectedBlockId: null,
+        armedAreaId: null,
+      };
     case "updateArea":
       return {
         ...state,
@@ -487,8 +521,11 @@ function loadPersisted(): Partial<State> | null {
 // --- context -------------------------------------------------------------
 
 interface StoreValue extends State {
+  /** Blocks in the week currently in view. Most UI wants this, not `blocks`. */
+  weekBlocks: PlannedBlock[];
   budget: Budget;
   syncDiff: SyncDiff;
+  isCurrentWeek: boolean;
   columnFromDate: (date: string) => number;
   arm: (areaId: string | null) => void;
   select: (blockId: string | null) => void;
@@ -501,6 +538,8 @@ interface StoreValue extends State {
   loadTemplate: () => void;
   saveToTemplate: () => void;
   clearWeek: () => void;
+  shiftWeek: (delta: number) => void;
+  goToCurrentWeek: () => void;
   updateArea: (areaId: string, patch: Partial<Area>) => void;
   addArea: (name: string) => void;
   archiveArea: (areaId: string) => void;
@@ -546,21 +585,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     state.lastSyncedAt,
   ]);
 
+  const weekBlocks = useMemo(
+    () => inWeek(state.blocks, state.weekStart),
+    [state.blocks, state.weekStart]
+  );
+
+  const weekExternal = useMemo(
+    () => state.external.filter((e) => {
+      const end = addDays(state.weekStart, 7);
+      return e.date >= state.weekStart && e.date < end;
+    }),
+    [state.external, state.weekStart]
+  );
+
   const budget = useMemo(
     () =>
       computeBudget(
         state.areas,
-        state.blocks,
-        state.external,
+        weekBlocks,
+        weekExternal,
         state.settings.sleep_hours_per_night
       ),
-    [state.areas, state.blocks, state.external, state.settings]
+    [state.areas, weekBlocks, weekExternal, state.settings]
   );
 
   // The dry-run diff, computed live off the SAME policy module the real
   // transport uses. "Owned" events are reconstructed from synced blocks.
   const syncDiff = useMemo(() => {
-    const existingOwned: GCalEvent[] = state.blocks
+    const existingOwned: GCalEvent[] = weekBlocks
       .filter((b) => b.gcal_event_id)
       .map((b) => ({
         id: b.gcal_event_id!,
@@ -569,18 +621,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         },
       }));
     return computeDiff(
-      state.blocks,
+      weekBlocks,
       state.areas,
       existingOwned,
-      state.external,
+      weekExternal,
       localISODate(new Date())
     );
-  }, [state.blocks, state.areas, state.external]);
+  }, [weekBlocks, state.areas, weekExternal]);
 
   const value: StoreValue = {
     ...state,
+    weekBlocks,
     budget,
     syncDiff,
+    isCurrentWeek:
+      state.weekStart === currentWeekStart(state.settings.week_starts_on),
     columnFromDate: useCallback(
       (date: string) => columnFromDateStr(state.weekStart, date),
       [state.weekStart]
@@ -608,6 +663,19 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     loadTemplate: useCallback(() => dispatch({ t: "loadTemplate" }), []),
     saveToTemplate: useCallback(() => dispatch({ t: "saveToTemplate" }), []),
     clearWeek: useCallback(() => dispatch({ t: "clearWeek" }), []),
+    shiftWeek: useCallback(
+      (delta: number) =>
+        dispatch({ t: "setWeekStart", weekStart: addDays(state.weekStart, delta * 7) }),
+      [state.weekStart]
+    ),
+    goToCurrentWeek: useCallback(
+      () =>
+        dispatch({
+          t: "setWeekStart",
+          weekStart: currentWeekStart(state.settings.week_starts_on),
+        }),
+      [state.settings.week_starts_on]
+    ),
     updateArea: useCallback(
       (areaId, patch) => dispatch({ t: "updateArea", areaId, patch }),
       []

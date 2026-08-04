@@ -44,7 +44,7 @@ export function AskPanel() {
     try {
       const weekJson = serializeWeek(
         store.areas,
-        store.blocks,
+        store.weekBlocks,
         store.budget,
         store.settings.week_starts_on
       );
@@ -56,7 +56,7 @@ export function AskPanel() {
           weekJson,
           areas: store.areas,
           weekStartsOn: store.settings.week_starts_on,
-          blockIds: store.blocks.map((b) => b.id),
+          blockIds: store.weekBlocks.map((b) => b.id),
         }),
       });
       const data = (await res.json()) as {

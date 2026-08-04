@@ -17,11 +17,16 @@ export function BlockView({
   area,
   selected,
   onClick,
+  column = 0,
+  columns = 1,
 }: {
   block: PlannedBlock;
   area: Area;
   selected: boolean;
   onClick: () => void;
+  /** Side-by-side position when blocks overlap (see lib/layout.ts). */
+  column?: number;
+  columns?: number;
 }) {
   const type = effectiveType(block, area);
   const isOpen = type === "open";
@@ -38,10 +43,12 @@ export function BlockView({
       type="button"
       onClick={onClick}
       aria-pressed={selected}
-      className="absolute left-[2px] right-[2px] overflow-hidden text-left"
+      className="absolute overflow-hidden text-left"
       style={{
         top,
         height: Math.max(height, 18),
+        left: `calc(2px + ${(column / columns) * 100}%)`,
+        width: `calc(${(1 / columns) * 100}% - 4px)`,
         border: isOpen ? "1px dashed #000" : "1px solid #000",
         background: selected ? "#000" : "#fff",
         color: selected ? "#fff" : "#000",

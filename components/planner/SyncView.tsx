@@ -18,7 +18,7 @@ export function SyncView() {
   const [justSynced, setJustSynced] = useState(false);
 
   const total = diff.created.length + diff.moved.length + diff.expired.length;
-  const openCount = store.blocks.filter((b) => b.type === "open").length;
+  const openCount = store.weekBlocks.filter((b) => b.type === "open").length;
 
   function commit() {
     store.syncCommit();
@@ -130,7 +130,7 @@ function DiffSection({
         </span>
       </div>
       {shown.map((l) => {
-        const block = store.blocks.find((b) => b.id === l.blockId);
+        const block = store.weekBlocks.find((b) => b.id === l.blockId);
         const area = block
           ? store.areas.find((a) => a.id === block.area_id)
           : undefined;

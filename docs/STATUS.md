@@ -22,6 +22,25 @@ rather than done for you. The code paths that use them are built and wired.
 | 7 | Sync | **UI + policy done; live transport pending.** The SYNC view renders the dry-run diff (computed by the same `computeDiff` the transport will use — new/moved/expired + untouched count) and a confirmed commit that currently applies locally. Connecting Google (SETUP.md) swaps in the real `CalendarClient`; ownership gate and open-never-syncs already enforced. |
 | 8 | Check-offs + review | **Done.** Mark Done on any selected block; the REVIEW view shows planned vs. completed hours per area (pattern fill = done, GREY25 = planned-not-done). No further analytics, on purpose. |
 
+## UI pass (post-launch)
+
+The first build was structurally right but read as a cramped webpage. A
+mobile-first overhaul followed:
+
+- **App shell:** the machine fills the viewport; content scrolls inside the
+  screen, no page-level scroll or rubber-banding from the Home Screen.
+- **The grid** renders at a fixed 48px/hour and scrolls, instead of crushing
+  17 hours into leftover space. Opens at the morning, draws a "now" line,
+  and splits overlapping blocks into side-by-side columns (`lib/layout.ts`).
+- **Budget meter** leads with UNCLAIMED / OVER BY at 26px; the full equation
+  moved behind a HOW? toggle with a plain-language feasibility read.
+- **Week navigation:** blocks are stored across weeks and selected by the
+  week in view, so you can plan ahead. Load/save template and clear act on
+  the visible week only.
+- **Mobile:** Ask is its own view, the day switcher shows day + date, areas
+  became a collapsible tray with per-target progress, and the armed state is
+  a full-width black banner.
+
 ## Also in
 
 - **PWA / Add to Home Screen:** manifest, generated icons

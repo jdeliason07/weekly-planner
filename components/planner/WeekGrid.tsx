@@ -17,6 +17,7 @@ import {
   minutesFromOffsetPx,
 } from "@/lib/grid";
 import { BlockView } from "./Block";
+import { layoutDay } from "@/lib/layout";
 import type { ExternalEvent } from "@/lib/types";
 
 const HOURS: number[] = [];
@@ -68,7 +69,7 @@ export function WeekGrid({ singleColumn }: { singleColumn?: number }) {
       )}
 
       {/* Empty state — says what to do next, over the grid. */}
-      {store.blocks.length === 0 && !armedArea && (
+      {store.weekBlocks.length === 0 && !armedArea && (
         <div className="shrink-0 border-b border-black bg-white px-3 py-2">
           <p
             className="font-prose text-black"
@@ -129,7 +130,7 @@ function DayColumn({ column }: { column: number }) {
   const label = dayLabel(column, store.settings.week_starts_on);
   const isSabbath = label === "Sun";
 
-  const dayBlocks = store.blocks.filter(
+  const dayBlocks = store.weekBlocks.filter(
     (b) => store.columnFromDate(b.date) === column
   );
   const dayExternal = store.external.filter(
@@ -195,16 +196,18 @@ function DayColumn({ column }: { column: number }) {
         />
       ))}
 
-      {/* Placed blocks. */}
-      {dayBlocks.map((b) => {
-        const area = store.areas.find((a) => a.id === b.area_id)!;
+      {/* Placed blocks, split into columns where they overlap. */}
+      {layoutDay(dayBlocks).map(({ block, column: col, columns }) => {
+        const area = store.areas.find((a) => a.id === block.area_id)!;
         return (
           <BlockView
-            key={b.id}
-            block={b}
+            key={block.id}
+            block={block}
             area={area}
-            selected={store.selectedBlockId === b.id}
-            onClick={() => store.select(b.id)}
+            column={col}
+            columns={columns}
+            selected={store.selectedBlockId === block.id}
+            onClick={() => store.select(block.id)}
           />
         );
       })}

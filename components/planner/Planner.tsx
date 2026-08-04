@@ -21,6 +21,7 @@ import { SelectionBar } from "./SelectionBar";
 import { SyncView } from "./SyncView";
 import { ReviewView } from "./ReviewView";
 import { dayLabel } from "@/lib/time";
+import { WeekNav } from "./WeekNav";
 
 export function Planner() {
   return (
@@ -69,6 +70,8 @@ function PlannerInner() {
         onSelect={setView}
         right={<TemplateMenu />}
       />
+
+      <WeekNav />
 
       <BudgetMeter budget={store.budget} />
 
@@ -197,7 +200,7 @@ function PlanView({ isDesktop }: { isDesktop: boolean }) {
     );
   }
 
-  const dayCount = store.blocks.filter(
+  const dayCount = store.weekBlocks.filter(
     (b) => store.columnFromDate(b.date) === mobileDay
   ).length;
 
