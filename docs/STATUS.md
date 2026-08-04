@@ -41,6 +41,28 @@ mobile-first overhaul followed:
   became a collapsible tray with per-target progress, and the armed state is
   a full-width black banner.
 
+## Touch gestures
+
+The grid is driven by direct manipulation, not just buttons:
+
+- **Swipe** left/right on a day to move day to day; it rolls into the next or
+  previous week at the edges rather than dead-ending.
+- **Pinch** (or ctrl/⌘+wheel) to zoom between four stops — whole day at a
+  glance through 15-minute detail. Zoom tracks your fingers live and settles
+  on the nearest stop; the middle of the view stays anchored so you don't lose
+  your place. Snap granularity follows the zoom (30m → 5m).
+- **Long-press a block** to lift it, then drag to another time. Holding near
+  the left or right edge steps the day and the block travels with it.
+- **Tap a block** to reveal two corner dots — top-left drags the start, bottom
+  right drags the end. Selecting scrolls the block fully into view so both
+  dots stay reachable above the selection bar.
+
+Gestures never fight each other: vertical scrolling stays the browser's job
+(`touch-action: pan-y`), a horizontal swipe needs to beat a 1.6:1 axis ratio,
+finger travel over 10px cancels a pending long-press, and surface gestures
+stand down entirely while a block is lifted. Drags preview in local state and
+commit once on release, so abandoning one changes nothing.
+
 ## Also in
 
 - **PWA / Add to Home Screen:** manifest, generated icons

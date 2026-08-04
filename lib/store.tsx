@@ -131,6 +131,13 @@ type Action =
   | { t: "remove"; blockId: string }
   | { t: "updateBlock"; blockId: string; patch: { label?: string | null; type?: BlockType } }
   | { t: "nudgeBlock"; blockId: string; kind: "shift" | "resize" | "day"; delta: number }
+  | {
+      t: "moveBlockTo";
+      blockId: string;
+      start: string;
+      end: string;
+      columnDelta: number;
+    }
   | { t: "assistant"; actions: AssistantAction[]; requestedBy: string }
   | { t: "undoCancel"; gcalEventId: string }
   | { t: "loadTemplate" }
@@ -315,6 +322,33 @@ function reducer(state: State, action: Action): State {
           ne = Math.max(s + 30, Math.min(ne, GRID_END_MIN));
           if (ne === e) return b;
           return { ...b, end_time: toHHMM(ne), sync_state: "unsynced" };
+        }),
+      };
+    }
+    case "moveBlockTo": {
+      // Commit of a drag/resize gesture: absolute times plus how many days it
+      // travelled. Clamped so a drag can never push a block off the week.
+      return {
+        ...state,
+        blocks: state.blocks.map((b) => {
+          if (b.id !== action.blockId) return b;
+          const col = columnFromDateStr(state.weekStart, b.date);
+          const nextCol = Math.min(6, Math.max(0, col + action.columnDelta));
+          const date = dateForColumn(state.weekStart, nextCol);
+          if (
+            b.start_time === action.start &&
+            b.end_time === action.end &&
+            b.date === date
+          ) {
+            return b; // nothing actually changed — don't dirty sync state
+          }
+          return {
+            ...b,
+            date,
+            start_time: action.start,
+            end_time: action.end,
+            sync_state: "unsynced",
+          };
         }),
       };
     }
@@ -633,6 +667,10 @@ interface StoreValue extends State {
   remove: (blockId: string) => void;
   updateBlock: (blockId: string, patch: { label?: string | null; type?: BlockType }) => void;
   nudgeBlock: (blockId: string, kind: "shift" | "resize" | "day", delta: number) => void;
+  moveBlockTo: (
+    blockId: string,
+    to: { start: string; end: string; columnDelta: number }
+  ) => void;
   applyAssistant: (actions: AssistantAction[], requestedBy: string) => void;
   undoCancel: (gcalEventId: string) => void;
   loadTemplate: () => void;
@@ -767,6 +805,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     ),
     nudgeBlock: useCallback(
       (blockId, kind, delta) => dispatch({ t: "nudgeBlock", blockId, kind, delta }),
+      []
+    ),
+    moveBlockTo: useCallback(
+      (blockId, to) =>
+        dispatch({
+          t: "moveBlockTo",
+          blockId,
+          start: to.start,
+          end: to.end,
+          columnDelta: to.columnDelta,
+        }),
       []
     ),
     applyAssistant: useCallback(

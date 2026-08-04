@@ -8,7 +8,7 @@
 // Mobile: one view at a time. Week fills the screen with a day switcher and
 // a collapsible area tray; Ask gets its own menu item.
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { StoreProvider, useStore } from "@/lib/store";
 import { MenuBar, type MenuItem } from "@/components/chrome/MenuBar";
 import { Window } from "@/components/chrome/Window";
@@ -176,14 +176,49 @@ function PlanView({ isDesktop }: { isDesktop: boolean }) {
   const [mobileDay, setMobileDay] = useState(0);
   const [trayOpen, setTrayOpen] = useState(true);
 
-  // Jump to today's column once mounted (local time, so no UTC drift).
+  // The current day is mirrored in a ref so stepDay can read it synchronously
+  // and report back whether it actually moved — the drag-to-edge gesture needs
+  // that answer immediately, and a state updater can't give it.
+  const dayRef = useRef(mobileDay);
+  dayRef.current = mobileDay;
+
+  // Step the visible day, rolling into the neighbouring week at the edges so
+  // swiping never dead-ends on Sunday or Saturday.
+  const stepDay = useCallback(
+    (dir: 1 | -1) => {
+      const next = dayRef.current + dir;
+      if (next < 0) {
+        store.shiftWeek(-1);
+        dayRef.current = 6;
+        setMobileDay(6);
+      } else if (next > 6) {
+        store.shiftWeek(1);
+        dayRef.current = 0;
+        setMobileDay(0);
+      } else {
+        dayRef.current = next;
+        setMobileDay(next);
+      }
+      return true;
+    },
+    [store]
+  );
+
+  // Jump to today's column on first paint only. Re-running this whenever the
+  // week changes would yank the view back to today mid-swipe.
+  const jumped = useRef(false);
   useEffect(() => {
+    if (jumped.current) return;
+    jumped.current = true;
     const now = new Date();
     const local = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
     const col = store.columnFromDate(local);
-    if (col >= 0 && col <= 6) setMobileDay(col);
+    if (col >= 0 && col <= 6) {
+      dayRef.current = col;
+      setMobileDay(col);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store.weekStart]);
+  }, []);
 
   if (isDesktop) {
     return (
@@ -237,7 +272,7 @@ function PlanView({ isDesktop }: { isDesktop: boolean }) {
               );
             })}
           </div>
-          <WeekGrid singleColumn={mobileDay} />
+          <WeekGrid singleColumn={mobileDay} onDayStep={stepDay} />
         </div>
       </Window>
 
