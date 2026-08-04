@@ -30,6 +30,7 @@ export function BlockView({
   onPointerDownBlock,
   onPointerUpBlock,
   onResizeStart,
+  tabIndex,
 }: {
   block: PlannedBlock;
   area: Area;
@@ -44,6 +45,8 @@ export function BlockView({
   onPointerDownBlock?: (e: React.PointerEvent) => void;
   onPointerUpBlock?: (e: React.PointerEvent) => void;
   onResizeStart?: (e: React.PointerEvent, edge: "start" | "end") => void;
+  /** -1 for blocks in an off-screen pager neighbour, so focus can't land there. */
+  tabIndex?: number;
 }) {
   const type = effectiveType(block, area);
   const isOpen = type === "open";
@@ -79,6 +82,7 @@ export function BlockView({
         onClick={onClick}
         onPointerDown={onPointerDownBlock}
         onPointerUp={onPointerUpBlock}
+        tabIndex={tabIndex}
         aria-pressed={selected}
         className="relative h-full w-full overflow-hidden text-left"
         style={{

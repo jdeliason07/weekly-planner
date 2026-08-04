@@ -3,13 +3,18 @@
 // The week grid. Renders at a variable pixels-per-hour scale and scrolls
 // vertically. Gestures:
 //
-//   • swipe left/right on a day      → previous / next day
-//   • pinch (or ctrl+wheel)          → zoom from whole-day to 15-minute detail
-//   • long-press a block             → lift and drag it to another time
-//   • drag a lifted block to an edge → the day steps and the block follows
-//   • drag a selected block's dots   → resize from either end
+//   • drag horizontally on a day    → the day tracks your finger; release
+//                                     settles onto the next / previous day
+//   • pinch (or ctrl+wheel)         → zoom from whole-day to 15-minute detail
+//   • long-press a block            → lift and drag it to another time
+//   • drag a lifted block to an edge→ the day steps and the block follows
+//   • drag a selected block's dots  → resize from either end
+//
+// In single-day view the grid is a pager: the previous and next days are
+// mounted either side of the visible one, so a swipe reveals real content
+// sliding in rather than cutting to it.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useStore, defaultPlacement } from "@/lib/store";
 import { GREY25, GREY50 } from "@/lib/patterns";
 import { GRID_START_MIN, GRID_END_MIN, dayLabel, toHHMM } from "@/lib/time";
@@ -29,12 +34,15 @@ import { useSurfaceGestures } from "./useSurfaceGestures";
 import { MacBtn } from "@/components/chrome/MacBtn";
 import type { ExternalEvent } from "@/lib/types";
 
+function localISO(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 export function WeekGrid({
   singleColumn,
   onDayStep,
 }: {
   singleColumn?: number;
-  /** Change the visible day. Returns false if there's nowhere to go. */
   onDayStep?: (dir: 1 | -1) => boolean;
 }) {
   const store = useStore();
@@ -45,9 +53,15 @@ export function WeekGrid({
   const isSingle = singleColumn !== undefined;
   const columns = isSingle ? [singleColumn] : [0, 1, 2, 3, 4, 5, 6];
 
-  const stepDay = useMemo(
-    () => onDayStep ?? (() => false),
-    [onDayStep]
+  const stepDay = useMemo(() => onDayStep ?? (() => false), [onDayStep]);
+
+  const dateForOffset = useCallback(
+    (offset: number) => {
+      const d = new Date(store.weekStart + "T00:00:00");
+      d.setDate(d.getDate() + offset);
+      return localISO(d);
+    },
+    [store.weekStart]
   );
 
   // ---- block drag / resize -------------------------------------------------
@@ -67,11 +81,12 @@ export function WeekGrid({
   });
 
   // ---- pinch zoom / swipe --------------------------------------------------
-  const { livePinchPx, surfaceHandlers } = useSurfaceGestures({
+  const { livePinchPx, swipe, settleMs, surfaceHandlers } = useSurfaceGestures({
     zoomIndex,
     setZoomIndex,
     swipeEnabled: isSingle,
     onSwipe: (dir) => stepDay(dir),
+    pageWidthRef: columnsRef,
     suspended: !!preview?.lifted,
   });
 
@@ -79,8 +94,7 @@ export function WeekGrid({
   const level = ZOOM_LEVELS[zoomIndex];
   const height = gridHeightPx(hourPx);
 
-  // Keep the middle of the view anchored while zooming, so you don't lose
-  // your place when the grid grows or shrinks under you.
+  // Keep the middle of the view anchored while zooming.
   const anchorRef = useRef<number | null>(null);
   useEffect(() => {
     const el = scrollRef.current;
@@ -92,9 +106,10 @@ export function WeekGrid({
       );
       return;
     }
-    const target =
-      pxFromMinutes(anchorRef.current, hourPx) - el.clientHeight / 2;
-    el.scrollTop = Math.max(0, target);
+    el.scrollTop = Math.max(
+      0,
+      pxFromMinutes(anchorRef.current, hourPx) - el.clientHeight / 2
+    );
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hourPx]);
 
@@ -102,7 +117,6 @@ export function WeekGrid({
     anchorRef.current = null;
   }, [zoomIndex]);
 
-  // Open the day at ~07:00 on first paint.
   useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = pxFromMinutes(7 * 60, hourPx) - 8;
@@ -117,7 +131,6 @@ export function WeekGrid({
     const el = scrollRef.current;
     const block = store.weekBlocks.find((b) => b.id === selectedId);
     if (!el || !block) return;
-    // Give the dots (which straddle the corners) room at both ends.
     const pad = 14;
     const top = pxFromHHMM(block.start_time, hourPx) - pad;
     const bottom = pxFromHHMM(block.end_time, hourPx) + pad;
@@ -133,13 +146,27 @@ export function WeekGrid({
   const hours: number[] = [];
   for (let m = GRID_START_MIN; m < GRID_END_MIN; m += 60) hours.push(m);
 
-  // Minor gridlines, only where there's room to read them.
   const minorLines: number[] = [];
   if (level.minor && hourPx >= 48) {
     for (let m = GRID_START_MIN; m < GRID_END_MIN; m += level.minor) {
       if (m % 60 !== 0) minorLines.push(m);
     }
   }
+
+  const swiping = swipe.dx !== 0 || swipe.settling;
+
+  const dayColProps = {
+    hourPx,
+    snap: level.snap,
+    hours,
+    minorLines,
+    columnCount: columns.length,
+    preview,
+    beginMove,
+    beginResize,
+    cancelPending,
+    dateForOffset,
+  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -158,7 +185,6 @@ export function WeekGrid({
         </button>
       )}
 
-      {/* Zoom control. Pinch works too; this is the discoverable version. */}
       <div className="flex shrink-0 items-center gap-1 border-b border-black bg-white px-1.5 py-1">
         <span className="font-chrome text-black" style={{ fontSize: 7, opacity: 0.7 }}>
           ZOOM
@@ -171,10 +197,7 @@ export function WeekGrid({
         >
           −
         </MacBtn>
-        <span
-          className="w-8 text-center font-chrome text-black"
-          style={{ fontSize: 8 }}
-        >
+        <span className="w-8 text-center font-chrome text-black" style={{ fontSize: 8 }}>
           {level.label}
         </span>
         <MacBtn
@@ -186,10 +209,7 @@ export function WeekGrid({
           +
         </MacBtn>
         {preview?.lifted ? (
-          <span
-            className="ml-auto truncate font-chrome text-black"
-            style={{ fontSize: 8 }}
-          >
+          <span className="ml-auto truncate font-chrome text-black" style={{ fontSize: 8 }}>
             {toHHMM(preview.startMin)}–{toHHMM(preview.endMin)}
             {preview.edge ? (preview.edge === "next" ? " · → NEXT DAY" : " · ← PREV DAY") : ""}
           </span>
@@ -226,10 +246,7 @@ export function WeekGrid({
       <div
         ref={scrollRef}
         className="min-h-0 flex-1 overflow-y-auto bg-white"
-        style={{
-          // Vertical scroll stays the browser's; we handle swipe and pinch.
-          touchAction: preview?.lifted ? "none" : "pan-y",
-        }}
+        style={{ touchAction: preview?.lifted ? "none" : "pan-y" }}
         {...surfaceHandlers}
       >
         <div className="flex" style={{ height }}>
@@ -245,23 +262,39 @@ export function WeekGrid({
             ))}
           </div>
 
-          <div ref={columnsRef} className="flex min-w-0 flex-1">
-            {columns.map((col) => (
-              <DayColumn
-                key={col}
-                column={col}
-                hourPx={hourPx}
-                snap={level.snap}
-                hours={hours}
-                minorLines={minorLines}
-                columnCount={columns.length}
-                preview={preview}
-                beginMove={beginMove}
-                beginResize={beginResize}
-                cancelPending={cancelPending}
-              />
-            ))}
-          </div>
+          {isSingle ? (
+            // Pager: yesterday / today / tomorrow, translated as one track so
+            // the neighbouring day is really there under your thumb.
+            <div ref={columnsRef} className="relative min-w-0 flex-1 overflow-hidden">
+              <div
+                className="flex h-full"
+                style={{
+                  width: "300%",
+                  transform: `translate3d(calc(-33.33333% + ${swipe.dx}px), 0, 0)`,
+                  transition: swipe.settling
+                    ? `transform ${settleMs}ms cubic-bezier(.22,.61,.36,1)`
+                    : "none",
+                  willChange: swiping ? "transform" : undefined,
+                }}
+              >
+                {[-1, 0, 1].map((offset) => (
+                  <DayColumn
+                    key={`${singleColumn}:${offset}`}
+                    column={singleColumn + offset}
+                    basis="33.33333%"
+                    inert={offset !== 0}
+                    {...dayColProps}
+                  />
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div ref={columnsRef} className="flex min-w-0 flex-1">
+              {columns.map((col) => (
+                <DayColumn key={col} column={col} {...dayColProps} />
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -296,6 +329,9 @@ function DayColumn({
   beginMove,
   beginResize,
   cancelPending,
+  dateForOffset,
+  basis,
+  inert = false,
 }: {
   column: number;
   hourPx: number;
@@ -307,58 +343,64 @@ function DayColumn({
   beginMove: ReturnType<typeof useBlockGestures>["beginMove"];
   beginResize: ReturnType<typeof useBlockGestures>["beginResize"];
   cancelPending: ReturnType<typeof useBlockGestures>["cancelPending"];
+  dateForOffset: (offset: number) => string;
+  /** Fixed width when used inside the pager track. */
+  basis?: string;
+  /** Off-screen neighbour: visible during a swipe, but not interactive. */
+  inert?: boolean;
 }) {
   const store = useStore();
-  const label = dayLabel(column, store.settings.week_starts_on);
-  const isSabbath = label === "Sun";
+  const dateISO = dateForOffset(column);
+  const dow = new Date(dateISO + "T00:00:00").getDay();
+  const isSabbath = dow === 0;
 
-  const dayBlocks = store.weekBlocks.filter(
-    (b) => store.columnFromDate(b.date) === column
-  );
-  const dayExternal = store.external.filter(
-    (e) => store.columnFromDate(e.date) === column
-  );
+  // Select by date, not by column offset, so the pager's neighbouring days
+  // render correctly even when they belong to the previous or next week.
+  const dayBlocks = store.blocks.filter((b) => b.date === dateISO);
+  const dayExternal = store.external.filter((e) => e.date === dateISO);
 
   const [nowMin, setNowMin] = useState<number | null>(null);
   useEffect(() => {
     function tick() {
       const n = new Date();
-      const local = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
-      const isToday = store.columnFromDate(local) === column;
+      const isToday = localISO(n) === dateISO;
       const mins = n.getHours() * 60 + n.getMinutes();
       setNowMin(isToday && mins >= GRID_START_MIN && mins <= GRID_END_MIN ? mins : null);
     }
     tick();
     const id = setInterval(tick, 60_000);
     return () => clearInterval(id);
-  }, [column, store]);
+  }, [dateISO]);
 
   function handleSlotClick(e: React.MouseEvent<HTMLDivElement>) {
-    if (!store.armedAreaId) return;
-    if (preview?.lifted) return;
+    if (inert || !store.armedAreaId || preview?.lifted) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const minutes = minutesFromOffsetPx(e.clientY - rect.top, hourPx);
     const { start, end } = defaultPlacement(snapMinutes(minutes, snap));
     store.place(column, start, end);
   }
 
-  // A block being dragged renders in whichever column the drag targets.
   const draggedHere =
-    preview?.lifted && preview.column === column
-      ? store.weekBlocks.find((b) => b.id === preview.blockId)
+    !inert && preview?.lifted && preview.column === column
+      ? store.blocks.find((b) => b.id === preview.blockId)
       : undefined;
   const visible = dayBlocks.filter(
     (b) => !(preview?.lifted && b.id === preview.blockId)
   );
-  const laidOut = layoutDay(visible);
 
   return (
     <div
-      className="relative min-w-0 flex-1 border-r border-black bg-white last:border-r-0"
+      className={`relative min-w-0 border-r border-black bg-white last:border-r-0 ${
+        basis ? "" : "flex-1"
+      }`}
+      style={{
+        ...(basis ? { flex: `0 0 ${basis}` } : {}),
+        // An off-screen neighbour is visible during a swipe but must not be
+        // touchable, clickable, or focusable — it isn't the day you're on.
+        ...(inert ? { pointerEvents: "none" as const } : {}),
+      }}
       onClick={handleSlotClick}
-      role={store.armedAreaId ? "button" : undefined}
-      aria-label={store.armedAreaId ? `Place block on ${label}` : undefined}
-      style={{ cursor: store.armedAreaId ? "crosshair" : "default" }}
+      aria-hidden={inert || undefined}
     >
       {isSabbath && (
         <div
@@ -397,8 +439,9 @@ function DayColumn({
         />
       ))}
 
-      {laidOut.map(({ block, column: col, columns: cols }) => {
-        const area = store.areas.find((a) => a.id === block.area_id)!;
+      {layoutDay(visible).map(({ block, column: col, columns: cols }) => {
+        const area = store.areas.find((a) => a.id === block.area_id);
+        if (!area) return null;
         return (
           <BlockView
             key={block.id}
@@ -407,16 +450,20 @@ function DayColumn({
             hourPx={hourPx}
             column={col}
             columns={cols}
-            selected={store.selectedBlockId === block.id}
-            onClick={() => store.select(block.id)}
-            onPointerDownBlock={(e) => beginMove(e, block, column)}
-            onPointerUpBlock={cancelPending}
-            onResizeStart={(e, edge) => beginResize(e, block, column, edge)}
+            selected={!inert && store.selectedBlockId === block.id}
+            tabIndex={inert ? -1 : undefined}
+            onClick={() => !inert && store.select(block.id)}
+            onPointerDownBlock={
+              inert ? undefined : (e) => beginMove(e, block, column)
+            }
+            onPointerUpBlock={inert ? undefined : cancelPending}
+            onResizeStart={
+              inert ? undefined : (e, edge) => beginResize(e, block, column, edge)
+            }
           />
         );
       })}
 
-      {/* The lifted block, following the finger. */}
       {draggedHere && preview && (
         <BlockView
           block={draggedHere}

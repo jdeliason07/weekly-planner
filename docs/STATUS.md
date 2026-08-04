@@ -46,7 +46,12 @@ mobile-first overhaul followed:
 The grid is driven by direct manipulation, not just buttons:
 
 - **Swipe** left/right on a day to move day to day; it rolls into the next or
-  previous week at the edges rather than dead-ending.
+  previous week at the edges rather than dead-ending. The single-day view is a
+  real pager — yesterday and tomorrow are mounted either side, so the track
+  follows your finger 1:1 and the neighbouring day slides in under your thumb.
+  A short drag springs back; a long one (or a flick) eases the rest of the way
+  and then swaps the day. Off-screen neighbours are inert: not touchable, not
+  clickable, not focusable.
 - **Pinch** (or ctrl/⌘+wheel) to zoom between four stops — whole day at a
   glance through 15-minute detail. Zoom tracks your fingers live and settles
   on the nearest stop; the middle of the view stays anchored so you don't lose
