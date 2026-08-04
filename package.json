@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "tsx lib/calendar/__tests__/ownership.test.mts"
+    "test": "tsx lib/calendar/__tests__/ownership.test.mts && tsx lib/calendar/__tests__/cancel-external.test.mts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.5.2",

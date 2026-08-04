@@ -10,7 +10,7 @@
 //   - the block must fall between 06:00 and 23:00
 //   - for move/remove, the block id must exist
 
-import type { Area } from "../types";
+import type { Area, ExternalEvent } from "../types";
 import { isValidGridRange, resolveDayColumn } from "../time";
 
 export type RawAction = Record<string, unknown>;
@@ -25,12 +25,18 @@ export type AssistantAction =
       label: string | null;
     }
   | { action: "move"; id: string; column: number; start: string; end: string }
-  | { action: "remove"; id: string };
+  | { action: "remove"; id: string }
+  // Deletes an event that lives on Google Calendar and was NOT created by
+  // this app. Only reachable when the phrase resolves to exactly ONE event —
+  // see lib/calendar/ownership.authorizeUserRequestedDeletion.
+  | { action: "cancel_event"; gcalEventId: string; title: string };
 
 export interface ValidateCtx {
   areas: Area[];
   weekStartsOn: number;
   blockIds: Set<string>;
+  /** Outside calendar events visible this week, for cancel_event. */
+  externalEvents?: ExternalEvent[];
 }
 
 type Result =
@@ -95,6 +101,29 @@ export function validateAction(raw: RawAction, ctx: ValidateCtx): Result {
     return { ok: true, value: { action: "remove", id } };
   }
 
+  if (action === "cancel_event") {
+    const id = str(raw.id) ?? str(raw.gcalEventId);
+    if (!id) return { ok: false, reason: "missing event id" };
+    const events = ctx.externalEvents ?? [];
+    // The id must name a real, currently-visible outside event. A model
+    // cannot invent an id and have it deleted.
+    const matches = events.filter((e) => e.gcal_event_id === id);
+    if (matches.length !== 1) {
+      return { ok: false, reason: "event id did not resolve to exactly one event" };
+    }
+    const ev = matches[0];
+    // Events this app created are NOT cancelled through this path — they are
+    // removed by deleting their block, which goes through the ordinary
+    // ownership-checked sync.
+    if (ev.ownedByApp) {
+      return { ok: false, reason: "app-owned event: remove its block instead" };
+    }
+    return {
+      ok: true,
+      value: { action: "cancel_event", gcalEventId: id, title: ev.title },
+    };
+  }
+
   return { ok: false, reason: "unknown action type" };
 }
 
@@ -115,11 +144,18 @@ export function validateAll(
 ): AssistantAction[] {
   if (!Array.isArray(rawActions)) return [];
   const out: AssistantAction[] = [];
+  let externalCancels = 0;
   for (const raw of rawActions) {
-    if (raw && typeof raw === "object") {
-      const r = validateAction(raw as RawAction, ctx);
-      if (r.ok) out.push(r.value);
+    if (!raw || typeof raw !== "object") continue;
+    const r = validateAction(raw as RawAction, ctx);
+    if (!r.ok) continue;
+    if (r.value.action === "cancel_event") {
+      // Hard cap: one outside-event deletion per reply, ever. This is what
+      // makes a bulk wipe impossible no matter what the model returns.
+      externalCancels += 1;
+      if (externalCancels > 1) continue;
     }
+    out.push(r.value);
   }
   return out;
 }

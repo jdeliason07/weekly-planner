@@ -116,3 +116,33 @@ not a convention you have to remember:
 
 To sanity-check it: create an untagged event by hand in your calendar and
 confirm no code path in the app can move or delete it.
+
+Run `npm test` to exercise these rules directly.
+
+### The one exception: "cancel my pickleball Tuesday"
+
+At the owner's request, the Ask panel can delete an outside calendar event —
+one Week Machine did not create — with **no confirmation step**. This is a
+deliberate, narrow exception to the rule above, and it lives in its own
+function (`authorizeUserRequestedDeletion`), never in `assertOwned`. The bulk
+sync path is unchanged and still cannot touch an event it did not create.
+
+What bounds it, structurally:
+
+- **One event per reply.** The function takes a single event and returns a
+  single id; there is no array-shaped variant. The validator also drops any
+  second `cancel_event` in a reply. "Cancel everything" has nowhere to land —
+  this is the exact failure mode that wiped a calendar before.
+- **Must resolve to exactly one event.** `matchCount` has to be 1, or it
+  throws `AmbiguousDeletionError` and deletes nothing. The assistant is
+  instructed to list the matches and ask instead.
+- **Must name a real, visible event id.** A model cannot invent an id.
+- **App-created events are excluded** — those are cancelled by removing their
+  block, through the ordinary confirmed sync.
+- **Every deletion is logged and undoable** from the chat. With no
+  confirmation before the delete, undo is what makes a mistake recoverable.
+  Google also keeps deleted events in Trash for ~30 days.
+
+If you want this exception removed, delete the `cancel_event` branch in
+`lib/ask/validate.ts` — the ownership rule then applies with no exceptions
+again.

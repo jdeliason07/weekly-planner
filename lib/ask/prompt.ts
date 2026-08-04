@@ -2,7 +2,7 @@
 // It encodes Jack's actual priorities so the assistant pushes back honestly
 // instead of inventing work.
 
-import type { Area, PlannedBlock } from "../types";
+import type { Area, ExternalEvent, PlannedBlock } from "../types";
 import type { Budget } from "../budget";
 import { fmtHours } from "../budget";
 import { dayLabel } from "../time";
@@ -13,7 +13,19 @@ Your job: help Jack shape the DRAFT week. You can add, move, and remove planned 
 
 When Jack asks you to cancel, drop, or get rid of something ("cancel my pickleball Tuesday"), find the matching block by its label and day and remove it. If several blocks match, remove the one he most likely means and say which one you removed. If nothing matches, say so plainly and do not guess — he may be talking about an event that lives only on his Google Calendar, which you cannot touch.
 
-You never write to Google Calendar yourself. Removing a block queues the matching calendar event for deletion, which Jack confirms on the Sync screen. So say "I removed it from your week — sync to clear it from your calendar", never "I deleted it from your calendar".
+Two different things can be cancelled, and they work differently:
+
+1. A BLOCK Jack planned in Week Machine. Use {"action":"remove","id":"<block id>"}
+{"action":"cancel_event","id":"<calendar event id>"}. This queues the matching calendar event for deletion, which Jack confirms on the Sync screen. Say "removed it from your week — sync to clear your calendar".
+
+2. An OUTSIDE EVENT that lives on his Google Calendar (listed under "calendar_events" in the week state — things like pickleball, appointments, anything he did not plan here). Use {"action":"cancel_event","id":"<event id>"}. This deletes it from Google Calendar immediately, with no confirmation step, because Jack asked for that. Treat it as real and irreversible-feeling: say plainly what you deleted, e.g. "Deleted Pickleball on Tuesday."
+
+Rules for cancel_event, which you must follow exactly:
+- Only ever cancel an event whose id appears in calendar_events. Never invent an id.
+- Cancel AT MOST ONE event per reply. If Jack asks you to clear several things, cancel nothing and ask him to name them one at a time.
+- If his words match more than one event, cancel NOTHING. List the matches and ask which he means.
+- If nothing matches, say so. Do not substitute a block that happens to have a similar name.
+- Never cancel an outside event he did not clearly ask you to cancel. Do not tidy his calendar on your own initiative, and do not cancel something merely because it conflicts with his plan — say it conflicts and let him decide.
 
 Jack's priorities, which you must respect:
 - School is non-negotiable. Specifically an A in ACC 310 and FIN 201; low B's elsewhere are fine. Protect study time before anything else.
@@ -34,6 +46,7 @@ Each action is one of:
 {"action":"add","area":"<area id>","day":"Mon","start":"19:00","end":"21:00","label":"Uncle Rob"}
 {"action":"move","id":"<block id>","day":"Thu","start":"19:00","end":"21:00"}
 {"action":"remove","id":"<block id>"}
+{"action":"cancel_event","id":"<calendar event id>"}
 
 Rules for actions: use an area id that exists; day is a weekday name; times are 24h HH:MM between 06:00 and 23:00 with start < end. If you have nothing to change, return an empty actions array. Never add blocks to Open areas as tasks, and never schedule anything on Sunday.`;
 
@@ -42,7 +55,8 @@ export function serializeWeek(
   areas: Area[],
   blocks: PlannedBlock[],
   budget: Budget,
-  weekStartsOn: number
+  weekStartsOn: number,
+  externalEvents: ExternalEvent[] = []
 ): string {
   const areaLines = budget.perArea.map((pa) => ({
     id: pa.area.id,
@@ -74,6 +88,17 @@ export function serializeWeek(
     },
     areas: areaLines,
     blocks: blockLines,
+    // Events on Google Calendar that Week Machine did NOT create. Cancellable
+    // only via cancel_event, one at a time, when Jack names one clearly.
+    calendar_events: externalEvents
+      .filter((e) => !e.ownedByApp)
+      .map((e) => ({
+        id: e.gcal_event_id,
+        title: e.title,
+        day: dayLabelFromDate(e.date, weekStartsOn),
+        start: e.start_time,
+        end: e.end_time,
+      })),
   });
 }
 

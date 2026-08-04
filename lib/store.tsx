@@ -29,6 +29,7 @@ import { computeBudget, type Budget } from "./budget";
 import { validateAction, type AssistantAction } from "./ask/validate";
 import { toHHMM, toMinutes, GRID_START_MIN, GRID_END_MIN } from "./time";
 import { computeDiff, type SyncDiff } from "./calendar/sync";
+import { authorizeUserRequestedDeletion } from "./calendar/ownership";
 import type { GCalEvent } from "./calendar/ownership";
 import { PATTERN_KEYS } from "./patterns";
 
@@ -108,6 +109,17 @@ interface State {
   selectedBlockId: string | null;
   lastSyncedAt: string | null;
   syncedEvents: SyncedEvent[];
+  /** Outside events deleted at the user's request, kept so they can be undone. */
+  cancelledEvents: CancelledEvent[];
+}
+
+/** An outside calendar event deleted on the user's instruction. Retained so
+ *  the deletion is auditable and reversible — there is no confirmation step
+ *  before the delete, so undo is what makes a mistake recoverable. */
+interface CancelledEvent {
+  event: ExternalEvent;
+  at: string;
+  requestedBy: string;
 }
 
 type Action =
@@ -119,7 +131,8 @@ type Action =
   | { t: "remove"; blockId: string }
   | { t: "updateBlock"; blockId: string; patch: { label?: string | null; type?: BlockType } }
   | { t: "nudgeBlock"; blockId: string; kind: "shift" | "resize" | "day"; delta: number }
-  | { t: "assistant"; actions: AssistantAction[] }
+  | { t: "assistant"; actions: AssistantAction[]; requestedBy: string }
+  | { t: "undoCancel"; gcalEventId: string }
   | { t: "loadTemplate" }
   | { t: "saveToTemplate" }
   | { t: "clearWeek" }
@@ -206,6 +219,7 @@ function makeInitial(): State {
     selectedBlockId: null,
     lastSyncedAt: null,
     syncedEvents: [],
+    cancelledEvents: [],
   };
 }
 
@@ -307,11 +321,15 @@ function reducer(state: State, action: Action): State {
     case "assistant": {
       // Re-validate every action against current state before applying.
       let blocks = state.blocks;
+      let external = state.external;
+      let cancelled = state.cancelledEvents;
+      let externalCancels = 0;
       for (const raw of action.actions) {
         const v = validateAction(raw, {
           areas: state.areas,
           weekStartsOn: state.settings.week_starts_on,
           blockIds: new Set(blocks.map((b) => b.id)),
+          externalEvents: external,
         });
         if (!v.ok) continue; // silently drop malformed/hostile actions
         const a = v.value;
@@ -347,9 +365,52 @@ function reducer(state: State, action: Action): State {
           );
         } else if (a.action === "remove") {
           blocks = blocks.filter((b) => b.id !== a.id);
+        } else if (a.action === "cancel_event") {
+          // Deleting an outside calendar event, at the user's instruction.
+          // Re-enforce the one-per-reply cap here too: the server already
+          // capped it, but this reducer must never depend on that.
+          if (externalCancels >= 1) continue;
+          const target = external.filter(
+            (e) => e.gcal_event_id === a.gcalEventId && !e.ownedByApp
+          );
+          // authorizeUserRequestedDeletion throws unless exactly one event
+          // matched — an ambiguous request deletes nothing.
+          let authorizedId: string;
+          try {
+            authorizedId = authorizeUserRequestedDeletion({
+              event: { id: a.gcalEventId, summary: a.title },
+              matchCount: target.length,
+              requestedBy: action.requestedBy,
+            });
+          } catch {
+            continue; // ambiguous or unmatched — drop it silently
+          }
+          externalCancels += 1;
+          external = external.filter((e) => e.gcal_event_id !== authorizedId);
+          cancelled = [
+            ...cancelled,
+            {
+              event: target[0],
+              at: new Date().toISOString(),
+              requestedBy: action.requestedBy,
+            },
+          ];
         }
       }
-      return { ...state, blocks };
+      return { ...state, blocks, external, cancelledEvents: cancelled };
+    }
+    case "undoCancel": {
+      const rec = state.cancelledEvents.find(
+        (c) => c.event.gcal_event_id === action.gcalEventId
+      );
+      if (!rec) return state;
+      return {
+        ...state,
+        external: [...state.external, rec.event],
+        cancelledEvents: state.cancelledEvents.filter(
+          (c) => c.event.gcal_event_id !== action.gcalEventId
+        ),
+      };
     }
     case "loadTemplate": {
       // Load the template into the week currently in view — the Sunday
@@ -531,6 +592,7 @@ interface PersistedState {
   weekStart: string;
   lastSyncedAt: string | null;
   syncedEvents: SyncedEvent[];
+  cancelledEvents: CancelledEvent[];
 }
 
 function loadPersisted(): Partial<State> | null {
@@ -548,6 +610,7 @@ function loadPersisted(): Partial<State> | null {
       weekStart: data.weekStart,
       lastSyncedAt: data.lastSyncedAt ?? null,
       syncedEvents: Array.isArray(data.syncedEvents) ? data.syncedEvents : [],
+      cancelledEvents: Array.isArray(data.cancelledEvents) ? data.cancelledEvents : [],
     };
   } catch {
     return null;
@@ -570,7 +633,8 @@ interface StoreValue extends State {
   remove: (blockId: string) => void;
   updateBlock: (blockId: string, patch: { label?: string | null; type?: BlockType }) => void;
   nudgeBlock: (blockId: string, kind: "shift" | "resize" | "day", delta: number) => void;
-  applyAssistant: (actions: AssistantAction[]) => void;
+  applyAssistant: (actions: AssistantAction[], requestedBy: string) => void;
+  undoCancel: (gcalEventId: string) => void;
   loadTemplate: () => void;
   saveToTemplate: () => void;
   clearWeek: () => void;
@@ -607,6 +671,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         weekStart: state.weekStart,
         lastSyncedAt: state.lastSyncedAt,
         syncedEvents: state.syncedEvents,
+        cancelledEvents: state.cancelledEvents,
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(persist));
     } catch {
@@ -621,6 +686,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     state.weekStart,
     state.lastSyncedAt,
     state.syncedEvents,
+    state.cancelledEvents,
   ]);
 
   const weekBlocks = useMemo(
@@ -704,7 +770,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       []
     ),
     applyAssistant: useCallback(
-      (actions) => dispatch({ t: "assistant", actions }),
+      (actions, requestedBy) =>
+        dispatch({ t: "assistant", actions, requestedBy }),
+      []
+    ),
+    undoCancel: useCallback(
+      (gcalEventId: string) => dispatch({ t: "undoCancel", gcalEventId }),
       []
     ),
     loadTemplate: useCallback(() => dispatch({ t: "loadTemplate" }), []),

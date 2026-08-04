@@ -59,3 +59,52 @@ export function assertOwned(event: GCalEvent): string {
 export const OWNED_EVENTS_QUERY = {
   privateExtendedProperty: `plannerApp=${PLANNER_APP}`,
 } as const;
+
+// ---------------------------------------------------------------------------
+// User-directed deletion of an OUTSIDE event.
+//
+// This is the one path that can remove a calendar event Week Machine did not
+// create. It exists because Jack explicitly asked for "cancel my pickleball
+// Tuesday" to just work. It is deliberately separate from assertOwned() so
+// that every OTHER write path — the whole bulk sync — keeps the original
+// guarantee untouched. Sync can never reach this function.
+//
+// What this path does NOT allow, by construction:
+//   - bulk deletion. It takes ONE event and returns ONE id. There is no
+//     array-shaped variant, so "cancel everything" has nowhere to land. This
+//     is the specific failure that wiped a calendar before.
+//   - ambiguous deletion. The caller must have resolved the request to
+//     exactly one event first; `matchCount` proves it did.
+//   - silent deletion. Every call must supply the phrase that requested it,
+//     and callers record the result so it can be undone.
+export class AmbiguousDeletionError extends Error {
+  constructor(public readonly matchCount: number) {
+    super(
+      matchCount === 0
+        ? "Nothing on the calendar matches that."
+        : `That matches ${matchCount} events — name which one.`
+    );
+    this.name = "AmbiguousDeletionError";
+  }
+}
+
+export interface UserDeletionRequest {
+  /** The event to remove. Exactly one. */
+  event: GCalEvent;
+  /** How many events the user's phrase matched. Must be 1. */
+  matchCount: number;
+  /** The user's own words, kept for the audit log. */
+  requestedBy: string;
+}
+
+export function authorizeUserRequestedDeletion(
+  req: UserDeletionRequest
+): string {
+  if (req.matchCount !== 1) {
+    throw new AmbiguousDeletionError(req.matchCount);
+  }
+  if (!req.requestedBy.trim()) {
+    throw new Error("A user-requested deletion must record what was asked.");
+  }
+  return req.event.id;
+}

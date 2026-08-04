@@ -54,11 +54,13 @@ sign-in, the sync UI, and the weekly review are the remaining phases.
 
 ## The non-negotiables (enforced in code, not by convention)
 
-- The app can never modify or delete a calendar event it didn't create
+- The bulk sync can never modify or delete a calendar event it didn't create
   (`lib/calendar/ownership.ts` — a single gate every write passes through).
+- The one exception, added deliberately: you can tell the Ask panel to cancel
+  a specific outside event and it deletes it without a confirmation step. It
+  is capped at one clearly-identified event at a time, and is logged and
+  undoable. See "The one exception" in `SETUP.md`.
 - Open blocks never reach the calendar (`lib/calendar/sync.ts`).
-- The Ask panel can only mutate the draft week — there is no code path from it
-  to the calendar.
 - Every assistant action is validated on the server *and* again before it
   touches state (`lib/ask/validate.ts`).
 - The budget meter is always visible while planning.

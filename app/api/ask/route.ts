@@ -1,15 +1,21 @@
 // The Ask route handler. The Anthropic API call runs HERE, never in the
 // browser. The API key and system prompt are server-side only.
 //
-// Hard boundary: this route can return actions that mutate the DRAFT week and
-// nothing else. There is no code path from here to Google Calendar. Do not add
-// one.
+// Boundary: this route returns ACTIONS. It never performs a calendar write
+// itself — applying actions is the client's job, and the bulk sync path stays
+// ownership-gated (assertOwned) and confirmation-gated as it always was.
+//
+// One action, cancel_event, does delete an outside calendar event without a
+// confirmation step, because the owner explicitly asked for that. It is capped
+// at one event per reply and must name an event id already visible in the
+// week state, so no reply can trigger a bulk deletion. See
+// lib/calendar/ownership.authorizeUserRequestedDeletion.
 
 import { NextResponse } from "next/server";
 import { SYSTEM_PROMPT } from "@/lib/ask/prompt";
 import { parseModelReply } from "@/lib/ask/parse";
 import { validateAll } from "@/lib/ask/validate";
-import type { Area } from "@/lib/types";
+import type { Area, ExternalEvent } from "@/lib/types";
 
 export const runtime = "nodejs";
 
@@ -21,6 +27,7 @@ interface AskRequestBody {
   areas: Area[];
   weekStartsOn: number;
   blockIds: string[];
+  externalEvents?: ExternalEvent[];
 }
 
 const MODEL = "claude-sonnet-5";
@@ -96,6 +103,7 @@ export async function POST(req: Request) {
     areas: body.areas,
     weekStartsOn: body.weekStartsOn,
     blockIds: new Set(body.blockIds),
+    externalEvents: body.externalEvents ?? [],
   });
 
   return NextResponse.json({ reply: parsed.reply, actions });

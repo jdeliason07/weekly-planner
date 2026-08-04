@@ -15,6 +15,8 @@ interface Turn {
   role: "user" | "assistant";
   content: string;
   applied?: number;
+  /** Outside calendar events deleted by this turn, offered for undo. */
+  cancelled?: { gcalEventId: string; title: string }[];
 }
 
 const STARTERS = [
@@ -46,7 +48,8 @@ export function AskPanel() {
         store.areas,
         store.weekBlocks,
         store.budget,
-        store.settings.week_starts_on
+        store.settings.week_starts_on,
+        store.external
       );
       const res = await fetch("/api/ask", {
         method: "POST",
@@ -57,6 +60,7 @@ export function AskPanel() {
           areas: store.areas,
           weekStartsOn: store.settings.week_starts_on,
           blockIds: store.weekBlocks.map((b) => b.id),
+          externalEvents: store.external,
         }),
       });
       const data = (await res.json()) as {
@@ -64,13 +68,19 @@ export function AskPanel() {
         actions: AssistantAction[];
       };
       const actions = Array.isArray(data.actions) ? data.actions : [];
-      if (actions.length) store.applyAssistant(actions);
+      if (actions.length) store.applyAssistant(actions, message);
       setTurns((t) => [
         ...t,
         {
           role: "assistant",
           content: data.reply || "Done.",
           applied: actions.length,
+          cancelled: actions
+            .filter((a) => a.action === "cancel_event")
+            .map((a) => ({
+              gcalEventId: (a as { gcalEventId: string }).gcalEventId,
+              title: (a as { title: string }).title,
+            })),
         },
       ]);
     } catch {
@@ -141,6 +151,36 @@ export function AskPanel() {
                 ✓ {t.applied} CHANGE{t.applied === 1 ? "" : "S"} APPLIED
               </div>
             ) : null}
+            {t.cancelled?.map((c) => {
+              const restored = store.external.some(
+                (e) => e.gcal_event_id === c.gcalEventId
+              );
+              return (
+                <div
+                  key={c.gcalEventId}
+                  className="mt-[3px] flex items-center gap-2"
+                >
+                  <span
+                    className="font-chrome text-black"
+                    style={{ fontSize: 8 }}
+                  >
+                    {restored
+                      ? `RESTORED ${c.title.toUpperCase()}`
+                      : `DELETED ${c.title.toUpperCase()}`}
+                  </span>
+                  {!restored && (
+                    <button
+                      type="button"
+                      onClick={() => store.undoCancel(c.gcalEventId)}
+                      className="font-chrome text-black underline"
+                      style={{ fontSize: 8 }}
+                    >
+                      UNDO
+                    </button>
+                  )}
+                </div>
+              );
+            })}
           </div>
         ))}
 
