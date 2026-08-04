@@ -106,11 +106,6 @@ function DayColumn({ column }: { column: number }) {
           />
         ))}
 
-        {/* Locked external events — read-only. */}
-        {dayExternal.map((ev) => (
-          <LockedEvent key={ev.gcal_event_id} ev={ev} />
-        ))}
-
         {/* Placed blocks. */}
         {dayBlocks.map((b) => {
           const area = store.areas.find((a) => a.id === b.area_id)!;
@@ -124,6 +119,12 @@ function DayColumn({ column }: { column: number }) {
             />
           );
         })}
+
+        {/* Locked external events — read-only, drawn ON TOP and offset right
+            so a clash with a real commitment is always visible. */}
+        {dayExternal.map((ev) => (
+          <LockedEvent key={ev.gcal_event_id} ev={ev} />
+        ))}
       </div>
     </div>
   );
@@ -134,7 +135,7 @@ function LockedEvent({ ev }: { ev: ExternalEvent }) {
   const height = hhmmToPercent(ev.end_time) - top;
   return (
     <div
-      className="absolute left-[2px] right-[2px] overflow-hidden border border-black"
+      className="pointer-events-none absolute left-[35%] right-[2px] z-10 overflow-hidden border border-black"
       style={{ top: `${top}%`, height: `${height}%`, minHeight: 12, ...GREY50 }}
       title={`${ev.title} (locked — external calendar event)`}
     >

@@ -15,21 +15,29 @@ rather than done for you. The code paths that use them are built and wired.
 |---|---|---|
 | 1 | Schema + auth | **Schema done** (`supabase/migrations/0001_init.sql`, full RLS). Auth client + Google scope wired (`lib/supabase`, `lib/google/tokens.ts`); the live sign-in + token round-trip is a `SETUP.md` step. |
 | 2 | Design system | **Done.** Chassis, 1-bit screen, Silkscreen + Geneva roles, all eleven patterns + GREY50/GREY25, and the chrome primitives (Window, TitleBar, MacBtn, MenuBar, PatternFill) as reusable components. |
-| 3 | Areas | **Partial.** The eleven areas are seeded and drive planning; ranking is respected. The create/edit/rank *UI* is stubbed (menu → AREAS) and is the next thing to build. |
-| 4 | Template week + grid | **Done for the core.** Tap-to-place grid, seven day columns + time gutter, locked external events rendered read-only, and the live budget meter (segmented bar, targets marker, OVER BY inversion). Template-vs-instance separation is modeled; "Save to template" promotion is Phase 5. |
-| 5 | Week instances | **Modeled, not yet surfaced.** Types and store distinguish template blocks from planned blocks; loading/promotion UI is pending. |
+| 3 | Areas | **Done.** Full editor (menu → AREAS): create, rename, rank ▲▼, targets, default type, season end date, success definition, archive. Settings (sleep, week start, timezone) live beside it. |
+| 4 | Template week + grid | **Done.** Tap-to-place grid, day columns + time gutter, locked external events rendered read-only *on top* so clashes are visible, live budget meter (segmented bar, targets marker, OVER BY inversion). Blocks edit in place from the selection bar: label, type, day, ±30m shift and resize. |
+| 5 | Week instances | **Done (local).** LOAD TMPL instantiates the template into the current week (expired sprints auto-retire); SAVE TMPL explicitly promotes the week back. Editing a week never touches the template. State persists in localStorage until Supabase lands. |
 | 6 | Ask panel | **Done.** Server route (`/api/ask`), server-side system prompt + key, robust JSON parsing (fence-strip + brace-extract), and validation that runs on the server *and again* in the store before mutating state. Malformed/hostile actions are dropped, never thrown. |
-| 7 | Sync | **Safety core done, UI pending.** Ownership rule (single `assertOwned` gate), open-never-syncs, dry-run diff with untouched count, recurrence + explicit timezone on every write, and a `CalendarClient` interface for the transport. The read/diff/commit *screens* and the live Calendar transport are the next build. |
-| 8 | Check-offs + review | **Partial.** Blocks can be marked done (select a block → Mark Done); the weekly planned-vs-completed review screen is pending. |
+| 7 | Sync | **UI + policy done; live transport pending.** The SYNC view renders the dry-run diff (computed by the same `computeDiff` the transport will use — new/moved/expired + untouched count) and a confirmed commit that currently applies locally. Connecting Google (SETUP.md) swaps in the real `CalendarClient`; ownership gate and open-never-syncs already enforced. |
+| 8 | Check-offs + review | **Done.** Mark Done on any selected block; the REVIEW view shows planned vs. completed hours per area (pattern fill = done, GREY25 = planned-not-done). No further analytics, on purpose. |
+
+## Also in
+
+- **PWA / Add to Home Screen:** manifest, generated icons
+  (`scripts/gen-icons.mjs`), service worker (network-first pages, cache-first
+  assets, never caches `/api/`), iOS standalone metadata.
+- **Persistence:** the whole planning state survives reloads via
+  localStorage (versioned key), until Supabase replaces it.
 
 ## Suggested next steps, in order
 
-1. Do the `SETUP.md` phase-1 token round-trip to confirm Google access works
+1. Deploy to Vercel (SETUP.md §4) so the app is on your phone's Home Screen.
+2. Do the `SETUP.md` phase-1 token round-trip to confirm Google access works
    end to end.
-2. Swap the in-memory store (`lib/store.tsx`) for Supabase reads/writes — the
-   action surface is deliberately the shape a DB-backed store will expose.
-3. Build the Areas editor (Phase 3) and the sync screens (Phase 7) on top of
-   the primitives and the safety module, both of which are already in place.
+3. Swap the localStorage store (`lib/store.tsx`) for Supabase reads/writes —
+   the action surface is deliberately the shape a DB-backed store exposes.
+4. Wire the live `CalendarClient` transport behind the existing SYNC view.
 
 ## Known gaps / decisions to confirm
 

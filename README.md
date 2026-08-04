@@ -28,6 +28,21 @@ touches a calendar.
 To connect Supabase, Google sign-in, the Ask panel, and calendar sync, follow
 [`SETUP.md`](./SETUP.md).
 
+## Add it to your Home Screen
+
+Week Machine is an installable web app (manifest + service worker + icons).
+Once it's reachable over HTTPS — deploy to Vercel per `SETUP.md`, it takes a
+few minutes — open the URL on your phone:
+
+- **iPhone (Safari):** tap the Share button → **Add to Home Screen** → Add.
+  It opens full-screen with the Week Machine icon, no browser chrome.
+- **Android (Chrome):** tap the ⋮ menu → **Add to Home screen** (or accept the
+  install prompt).
+
+The shell is cached by the service worker, so it opens instantly from the
+icon; your week lives in on-device storage until Supabase is connected, so it
+persists across launches on the same device.
+
 ## What's built (and what's next)
 
 See [`docs/STATUS.md`](./docs/STATUS.md) for the phase-by-phase state. In short:

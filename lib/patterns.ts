@@ -22,6 +22,21 @@ export type PatternKey =
   | "diagWide"
   | "checkerBig";
 
+// All eleven, in assignment order — new areas pick the least-used one.
+export const PATTERN_KEYS: PatternKey[] = [
+  "solid",
+  "checker",
+  "diagR",
+  "diagL",
+  "horiz",
+  "vert",
+  "cross",
+  "dots",
+  "dotsDense",
+  "diagWide",
+  "checkerBig",
+];
+
 // A pattern is expressed as the CSS needed to paint it into a box.
 export function patternStyle(key: PatternKey): CSSProperties {
   switch (key) {

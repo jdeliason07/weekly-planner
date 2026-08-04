@@ -1,10 +1,8 @@
 "use client";
 
-// The planner store. In this phase it holds everything in memory, seeded with
-// the eleven areas and a starter template, so the design system and the
-// budget meter are fully reviewable without any accounts. The shape of the
-// actions mirrors what a Supabase-backed store will expose, so wiring the
-// database later is a swap of this provider, not a rewrite of the UI.
+// The planner store. Holds the working state client-side, persisted to
+// localStorage so the week survives reloads, and shaped so a Supabase-backed
+// store can replace this provider without rewriting the UI.
 //
 // It also applies validated assistant actions — the SAME validator the server
 // uses (lib/ask/validate) runs again here before any mutation touches state.
@@ -13,62 +11,128 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useReducer,
   type ReactNode,
 } from "react";
 import type {
   Area,
+  BlockType,
   ExternalEvent,
   PlannedBlock,
+  TemplateBlock,
   UserSettings,
 } from "./types";
 import { SEED_AREAS, SEED_TEMPLATE_BLOCKS, SEED_USER } from "./seed";
 import { computeBudget, type Budget } from "./budget";
 import { validateAction, type AssistantAction } from "./ask/validate";
-import { toHHMM, GRID_START_MIN } from "./time";
+import { toHHMM, toMinutes, GRID_START_MIN, GRID_END_MIN } from "./time";
+import { computeDiff, type SyncDiff } from "./calendar/sync";
+import type { GCalEvent } from "./calendar/ownership";
+import { PATTERN_KEYS } from "./patterns";
 
-let idCounter = 1000;
+const STORAGE_KEY = "weekmachine-state-v1";
+
 function uid(prefix: string) {
-  idCounter += 1;
-  return `${prefix}-${idCounter}`;
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `${prefix}-${crypto.randomUUID()}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-// The Monday (or week-start) date for the current demo week.
+// Local (not UTC) YYYY-MM-DD — toISOString would shift evening hours across
+// the date line and corrupt week boundaries.
+function localISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function currentWeekStart(weekStartsOn: number): string {
   const now = new Date();
-  const day = now.getDay();
-  const diff = (day - weekStartsOn + 7) % 7;
+  const diff = (now.getDay() - weekStartsOn + 7) % 7;
   const d = new Date(now);
   d.setDate(now.getDate() - diff);
-  return d.toISOString().slice(0, 10);
+  return localISODate(d);
 }
 
 function dateForColumn(weekStart: string, column: number): string {
   const d = new Date(weekStart + "T00:00:00");
   d.setDate(d.getDate() + column);
-  return d.toISOString().slice(0, 10);
+  return localISODate(d);
+}
+
+function columnFromDateStr(weekStart: string, date: string): number {
+  const a = new Date(weekStart + "T00:00:00").getTime();
+  const b = new Date(date + "T00:00:00").getTime();
+  return Math.round((b - a) / 86_400_000);
 }
 
 interface State {
   areas: Area[];
   blocks: PlannedBlock[];
+  template: TemplateBlock[];
   external: ExternalEvent[];
   settings: UserSettings;
   weekStart: string;
   armedAreaId: string | null;
   selectedBlockId: string | null;
+  lastSyncedAt: string | null;
 }
 
 type Action =
+  | { t: "hydrate"; data: Partial<State> }
   | { t: "arm"; areaId: string | null }
   | { t: "select"; blockId: string | null }
   | { t: "place"; column: number; start: string; end: string }
   | { t: "toggleDone"; blockId: string }
   | { t: "remove"; blockId: string }
-  | { t: "move"; blockId: string; column: number; start: string; end: string }
+  | { t: "updateBlock"; blockId: string; patch: { label?: string | null; type?: BlockType } }
+  | { t: "nudgeBlock"; blockId: string; kind: "shift" | "resize" | "day"; delta: number }
   | { t: "assistant"; actions: AssistantAction[] }
-  | { t: "loadTemplate" };
+  | { t: "loadTemplate" }
+  | { t: "saveToTemplate" }
+  | { t: "updateArea"; areaId: string; patch: Partial<Area> }
+  | { t: "addArea"; name: string }
+  | { t: "archiveArea"; areaId: string }
+  | { t: "moveAreaRank"; areaId: string; dir: -1 | 1 }
+  | { t: "updateSettings"; patch: Partial<UserSettings> }
+  | { t: "syncCommit" };
+
+function instantiateTemplate(
+  template: TemplateBlock[],
+  areas: Area[],
+  weekStart: string
+): PlannedBlock[] {
+  return template.flatMap((tb) => {
+    const area = areas.find((a) => a.id === tb.area_id);
+    if (!area || area.archived_at) return [];
+    const date = dateForColumn(weekStart, tb.day_of_week);
+    // Sprint blocks past their season end auto-retire: they stop appearing
+    // in future weeks the moment the season is over.
+    const type = tb.type ?? area.default_type;
+    if (type === "sprint" && area.season_end_date && date > area.season_end_date) {
+      return [];
+    }
+    return [
+      {
+        id: uid("b"),
+        week_plan_id: "week-" + weekStart,
+        area_id: tb.area_id,
+        date,
+        start_time: tb.start_time,
+        end_time: tb.end_time,
+        label: tb.label,
+        type,
+        gcal_event_id: null,
+        sync_state: "unsynced" as const,
+        completed_at: null,
+      },
+    ];
+  });
+}
 
 function makeInitial(): State {
   const settings: UserSettings = {
@@ -78,26 +142,10 @@ function makeInitial(): State {
     timezone: "America/Denver",
   };
   const weekStart = currentWeekStart(settings.week_starts_on);
+  const blocks = instantiateTemplate(SEED_TEMPLATE_BLOCKS, SEED_AREAS, weekStart);
 
-  const blocks: PlannedBlock[] = SEED_TEMPLATE_BLOCKS.map((tb) => {
-    const area = SEED_AREAS.find((a) => a.id === tb.area_id)!;
-    return {
-      id: uid("b"),
-      week_plan_id: "demo-week",
-      area_id: tb.area_id,
-      date: dateForColumn(weekStart, tb.day_of_week),
-      start_time: tb.start_time,
-      end_time: tb.end_time,
-      label: tb.label,
-      type: tb.type ?? area.default_type,
-      gcal_event_id: null,
-      sync_state: "unsynced",
-      completed_at: null,
-    };
-  });
-
-  // A couple of read-only external events, to show locked commitments on the
-  // grid and in the LOCKED figure. Not owned by the app.
+  // Read-only external events, to show locked commitments. Not owned by the
+  // app. (Replaced by real Calendar reads once Google is connected.)
   const external: ExternalEvent[] = [
     {
       gcal_event_id: "ext-dentist",
@@ -120,22 +168,25 @@ function makeInitial(): State {
   return {
     areas: SEED_AREAS,
     blocks,
+    template: SEED_TEMPLATE_BLOCKS,
     external,
     settings,
     weekStart,
     armedAreaId: null,
     selectedBlockId: null,
+    lastSyncedAt: null,
   };
-}
-
-function columnFromDate(weekStart: string, date: string): number {
-  const a = new Date(weekStart + "T00:00:00").getTime();
-  const b = new Date(date + "T00:00:00").getTime();
-  return Math.round((b - a) / 86_400_000);
 }
 
 function reducer(state: State, action: Action): State {
   switch (action.t) {
+    case "hydrate":
+      return {
+        ...state,
+        ...action.data,
+        armedAreaId: null,
+        selectedBlockId: null,
+      };
     case "arm":
       return { ...state, armedAreaId: action.areaId, selectedBlockId: null };
     case "select":
@@ -146,7 +197,7 @@ function reducer(state: State, action: Action): State {
       if (!area) return state;
       const block: PlannedBlock = {
         id: uid("b"),
-        week_plan_id: "demo-week",
+        week_plan_id: "week-" + state.weekStart,
         area_id: area.id,
         date: dateForColumn(state.weekStart, action.column),
         start_time: action.start,
@@ -157,6 +208,7 @@ function reducer(state: State, action: Action): State {
         sync_state: "unsynced",
         completed_at: null,
       };
+      // Stay armed — placing several blocks in a row is the common flow.
       return { ...state, blocks: [...state.blocks, block] };
     }
     case "toggleDone":
@@ -164,10 +216,7 @@ function reducer(state: State, action: Action): State {
         ...state,
         blocks: state.blocks.map((b) =>
           b.id === action.blockId
-            ? {
-                ...b,
-                completed_at: b.completed_at ? null : new Date().toISOString(),
-              }
+            ? { ...b, completed_at: b.completed_at ? null : new Date().toISOString() }
             : b
         ),
       };
@@ -177,21 +226,53 @@ function reducer(state: State, action: Action): State {
         selectedBlockId: null,
         blocks: state.blocks.filter((b) => b.id !== action.blockId),
       };
-    case "move":
+    case "updateBlock":
       return {
         ...state,
         blocks: state.blocks.map((b) =>
           b.id === action.blockId
             ? {
                 ...b,
-                date: dateForColumn(state.weekStart, action.column),
-                start_time: action.start,
-                end_time: action.end,
+                ...("label" in action.patch ? { label: action.patch.label ?? null } : {}),
+                ...(action.patch.type ? { type: action.patch.type } : {}),
                 sync_state: "unsynced",
               }
             : b
         ),
       };
+    case "nudgeBlock": {
+      return {
+        ...state,
+        blocks: state.blocks.map((b) => {
+          if (b.id !== action.blockId) return b;
+          if (action.kind === "day") {
+            const col = columnFromDateStr(state.weekStart, b.date);
+            const next = Math.min(6, Math.max(0, col + action.delta));
+            if (next === col) return b;
+            return { ...b, date: dateForColumn(state.weekStart, next), sync_state: "unsynced" };
+          }
+          const s = toMinutes(b.start_time);
+          const e = toMinutes(b.end_time);
+          if (action.kind === "shift") {
+            const dur = e - s;
+            let ns = s + action.delta;
+            ns = Math.max(GRID_START_MIN, Math.min(ns, GRID_END_MIN - dur));
+            if (ns === s) return b;
+            return {
+              ...b,
+              start_time: toHHMM(ns),
+              end_time: toHHMM(ns + dur),
+              sync_state: "unsynced",
+            };
+          }
+          // resize: adjust the end, keep at least 30 minutes.
+          let ne = e + action.delta;
+          ne = Math.max(s + 30, Math.min(ne, GRID_END_MIN));
+          if (ne === e) return b;
+          return { ...b, end_time: toHHMM(ne), sync_state: "unsynced" };
+        }),
+      };
+    }
     case "assistant": {
       // Re-validate every action against current state before applying.
       let blocks = state.blocks;
@@ -205,14 +286,11 @@ function reducer(state: State, action: Action): State {
         const a = v.value;
         if (a.action === "add") {
           const area = state.areas.find((x) => x.id === a.area)!;
-          // The assistant may never create Open blocks that would later reach
-          // the calendar issue aside — it can add to any area, but Open stays
-          // the area default. It never syncs regardless (enforced in sync).
           blocks = [
             ...blocks,
             {
               id: uid("b"),
-              week_plan_id: "demo-week",
+              week_plan_id: "week-" + state.weekStart,
               area_id: area.id,
               date: dateForColumn(state.weekStart, a.column),
               start_time: a.start,
@@ -243,31 +321,226 @@ function reducer(state: State, action: Action): State {
       return { ...state, blocks };
     }
     case "loadTemplate": {
-      const fresh = makeInitial();
-      return { ...state, blocks: fresh.blocks };
+      // Load the template into a week instance dated to the CURRENT week —
+      // the Sunday ritual. Never modifies the template.
+      const weekStart = currentWeekStart(state.settings.week_starts_on);
+      return {
+        ...state,
+        weekStart,
+        blocks: instantiateTemplate(state.template, state.areas, weekStart),
+        selectedBlockId: null,
+        armedAreaId: null,
+      };
+    }
+    case "saveToTemplate": {
+      // Explicit promotion: the current week's blocks become the template.
+      const template: TemplateBlock[] = state.blocks.map((b) => ({
+        id: uid("t"),
+        user_id: SEED_USER,
+        area_id: b.area_id,
+        day_of_week: Math.min(6, Math.max(0, columnFromDateStr(state.weekStart, b.date))),
+        start_time: b.start_time,
+        end_time: b.end_time,
+        label: b.label,
+        type: b.type,
+      }));
+      return { ...state, template };
+    }
+    case "updateArea":
+      return {
+        ...state,
+        areas: state.areas.map((a) =>
+          a.id === action.areaId ? { ...a, ...action.patch, id: a.id } : a
+        ),
+      };
+    case "addArea": {
+      const name = action.name.trim();
+      if (!name) return state;
+      // Pick the least-used pattern so new areas stay distinguishable.
+      const counts = new Map<string, number>(PATTERN_KEYS.map((k) => [k, 0]));
+      for (const a of state.areas) {
+        if (!a.archived_at) counts.set(a.pattern, (counts.get(a.pattern) ?? 0) + 1);
+      }
+      const pattern = PATTERN_KEYS.reduce((best, k) =>
+        (counts.get(k) ?? 0) < (counts.get(best) ?? 0) ? k : best
+      );
+      const maxRank = Math.max(0, ...state.areas.map((a) => a.rank));
+      const area: Area = {
+        id: uid("area"),
+        user_id: SEED_USER,
+        name,
+        default_type: "anchor",
+        rank: maxRank + 1,
+        target_hours_per_week: 2,
+        pattern,
+        season_end_date: null,
+        success_definition: "",
+        archived_at: null,
+      };
+      return { ...state, areas: [...state.areas, area] };
+    }
+    case "archiveArea":
+      return {
+        ...state,
+        armedAreaId: state.armedAreaId === action.areaId ? null : state.armedAreaId,
+        areas: state.areas.map((a) =>
+          a.id === action.areaId ? { ...a, archived_at: new Date().toISOString() } : a
+        ),
+        // Blocks already placed stay — archiving stops future planning, it
+        // doesn't rewrite history.
+      };
+    case "moveAreaRank": {
+      const ordered = [...state.areas]
+        .filter((a) => !a.archived_at)
+        .sort((a, b) => a.rank - b.rank);
+      const idx = ordered.findIndex((a) => a.id === action.areaId);
+      const swap = idx + action.dir;
+      if (idx === -1 || swap < 0 || swap >= ordered.length) return state;
+      const rankA = ordered[idx].rank;
+      const rankB = ordered[swap].rank;
+      return {
+        ...state,
+        areas: state.areas.map((a) =>
+          a.id === ordered[idx].id
+            ? { ...a, rank: rankB }
+            : a.id === ordered[swap].id
+            ? { ...a, rank: rankA }
+            : a
+        ),
+      };
+    }
+    case "updateSettings":
+      return { ...state, settings: { ...state.settings, ...action.patch } };
+    case "syncCommit": {
+      // Demo-mode commit: apply the confirmed diff locally. Blocks that would
+      // be written get a simulated event id and flip to synced; expired
+      // sprint events are removed from the "calendar". The real transport
+      // (lib/calendar/sync.ts buildWriteOps + CalendarClient) replaces the id
+      // assignment when Google is connected — the policy code is identical.
+      const today = localISODate(new Date());
+      return {
+        ...state,
+        lastSyncedAt: new Date().toISOString(),
+        blocks: state.blocks.map((b) => {
+          const area = state.areas.find((a) => a.id === b.area_id);
+          if (!area) return b;
+          const type = b.type ?? area.default_type;
+          if (type === "open") return b; // Open never syncs.
+          const expired =
+            type === "sprint" && area.season_end_date && b.date > area.season_end_date;
+          if (expired) {
+            return b.gcal_event_id
+              ? { ...b, gcal_event_id: null, sync_state: "synced" as const }
+              : b;
+          }
+          if (b.sync_state === "unsynced") {
+            return {
+              ...b,
+              gcal_event_id: b.gcal_event_id ?? `demo-gcal-${b.id}`,
+              sync_state: "synced" as const,
+            };
+          }
+          return b;
+        }),
+      };
     }
     default:
       return state;
   }
 }
 
+// --- persistence -------------------------------------------------------------
+
+interface PersistedState {
+  areas: Area[];
+  blocks: PlannedBlock[];
+  template: TemplateBlock[];
+  external: ExternalEvent[];
+  settings: UserSettings;
+  weekStart: string;
+  lastSyncedAt: string | null;
+}
+
+function loadPersisted(): Partial<State> | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as PersistedState;
+    if (!Array.isArray(data.areas) || !Array.isArray(data.blocks)) return null;
+    return {
+      areas: data.areas,
+      blocks: data.blocks,
+      template: Array.isArray(data.template) ? data.template : SEED_TEMPLATE_BLOCKS,
+      external: Array.isArray(data.external) ? data.external : [],
+      settings: data.settings,
+      weekStart: data.weekStart,
+      lastSyncedAt: data.lastSyncedAt ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+// --- context -------------------------------------------------------------
+
 interface StoreValue extends State {
   budget: Budget;
+  syncDiff: SyncDiff;
   columnFromDate: (date: string) => number;
   arm: (areaId: string | null) => void;
   select: (blockId: string | null) => void;
   place: (column: number, start: string, end: string) => void;
   toggleDone: (blockId: string) => void;
   remove: (blockId: string) => void;
-  move: (blockId: string, column: number, start: string, end: string) => void;
+  updateBlock: (blockId: string, patch: { label?: string | null; type?: BlockType }) => void;
+  nudgeBlock: (blockId: string, kind: "shift" | "resize" | "day", delta: number) => void;
   applyAssistant: (actions: AssistantAction[]) => void;
   loadTemplate: () => void;
+  saveToTemplate: () => void;
+  updateArea: (areaId: string, patch: Partial<Area>) => void;
+  addArea: (name: string) => void;
+  archiveArea: (areaId: string) => void;
+  moveAreaRank: (areaId: string, dir: -1 | 1) => void;
+  updateSettings: (patch: Partial<UserSettings>) => void;
+  syncCommit: () => void;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, makeInitial);
+
+  // Hydrate from localStorage after mount (SSR-safe), then persist on change.
+  useEffect(() => {
+    const data = loadPersisted();
+    if (data) dispatch({ t: "hydrate", data });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    try {
+      const persist: PersistedState = {
+        areas: state.areas,
+        blocks: state.blocks,
+        template: state.template,
+        external: state.external,
+        settings: state.settings,
+        weekStart: state.weekStart,
+        lastSyncedAt: state.lastSyncedAt,
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(persist));
+    } catch {
+      // Storage full or unavailable — the app still works, it just won't persist.
+    }
+  }, [
+    state.areas,
+    state.blocks,
+    state.template,
+    state.external,
+    state.settings,
+    state.weekStart,
+    state.lastSyncedAt,
+  ]);
 
   const budget = useMemo(
     () =>
@@ -280,11 +553,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     [state.areas, state.blocks, state.external, state.settings]
   );
 
+  // The dry-run diff, computed live off the SAME policy module the real
+  // transport uses. "Owned" events are reconstructed from synced blocks.
+  const syncDiff = useMemo(() => {
+    const existingOwned: GCalEvent[] = state.blocks
+      .filter((b) => b.gcal_event_id)
+      .map((b) => ({
+        id: b.gcal_event_id!,
+        extendedProperties: {
+          private: { plannerApp: "weekmachine", plannerBlockId: b.id },
+        },
+      }));
+    return computeDiff(
+      state.blocks,
+      state.areas,
+      existingOwned,
+      state.external,
+      localISODate(new Date())
+    );
+  }, [state.blocks, state.areas, state.external]);
+
   const value: StoreValue = {
     ...state,
     budget,
+    syncDiff,
     columnFromDate: useCallback(
-      (date: string) => columnFromDate(state.weekStart, date),
+      (date: string) => columnFromDateStr(state.weekStart, date),
       [state.weekStart]
     ),
     arm: useCallback((areaId) => dispatch({ t: "arm", areaId }), []),
@@ -293,14 +587,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       (column, start, end) => dispatch({ t: "place", column, start, end }),
       []
     ),
-    toggleDone: useCallback(
-      (blockId) => dispatch({ t: "toggleDone", blockId }),
+    toggleDone: useCallback((blockId) => dispatch({ t: "toggleDone", blockId }), []),
+    remove: useCallback((blockId) => dispatch({ t: "remove", blockId }), []),
+    updateBlock: useCallback(
+      (blockId, patch) => dispatch({ t: "updateBlock", blockId, patch }),
       []
     ),
-    remove: useCallback((blockId) => dispatch({ t: "remove", blockId }), []),
-    move: useCallback(
-      (blockId, column, start, end) =>
-        dispatch({ t: "move", blockId, column, start, end }),
+    nudgeBlock: useCallback(
+      (blockId, kind, delta) => dispatch({ t: "nudgeBlock", blockId, kind, delta }),
       []
     ),
     applyAssistant: useCallback(
@@ -308,6 +602,22 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       []
     ),
     loadTemplate: useCallback(() => dispatch({ t: "loadTemplate" }), []),
+    saveToTemplate: useCallback(() => dispatch({ t: "saveToTemplate" }), []),
+    updateArea: useCallback(
+      (areaId, patch) => dispatch({ t: "updateArea", areaId, patch }),
+      []
+    ),
+    addArea: useCallback((name) => dispatch({ t: "addArea", name }), []),
+    archiveArea: useCallback((areaId) => dispatch({ t: "archiveArea", areaId }), []),
+    moveAreaRank: useCallback(
+      (areaId, dir) => dispatch({ t: "moveAreaRank", areaId, dir }),
+      []
+    ),
+    updateSettings: useCallback(
+      (patch) => dispatch({ t: "updateSettings", patch }),
+      []
+    ),
+    syncCommit: useCallback(() => dispatch({ t: "syncCommit" }), []),
   };
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
@@ -324,6 +634,9 @@ export function defaultPlacement(slotMinutes: number): {
   start: string;
   end: string;
 } {
-  const start = Math.max(slotMinutes, GRID_START_MIN);
+  const start = Math.min(
+    Math.max(slotMinutes, GRID_START_MIN),
+    GRID_END_MIN - 60
+  );
   return { start: toHHMM(start), end: toHHMM(start + 60) };
 }
