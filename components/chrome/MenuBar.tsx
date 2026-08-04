@@ -1,7 +1,7 @@
 "use client";
 
-// The menu bar replaces tabs entirely. 20px tall, black bottom border, a ✳ at
-// far left. Items invert when active — black fill, white text.
+// The menu bar replaces tabs entirely. A ✳ at far left, items that invert
+// when active — black fill, white text, never a highlight color.
 
 export interface MenuItem {
   key: string;
@@ -20,15 +20,15 @@ export function MenuBar({
   right?: React.ReactNode;
 }) {
   return (
-    <div className="flex h-5 shrink-0 items-stretch border-b border-black bg-white">
+    <div className="relative z-40 flex h-7 shrink-0 items-stretch border-b border-black bg-white">
       <div
         aria-hidden
         className="flex items-center px-2 font-chrome text-black"
-        style={{ fontSize: 11 }}
+        style={{ fontSize: 12 }}
       >
         ✳
       </div>
-      <nav className="flex items-stretch" aria-label="Main">
+      <nav className="flex min-w-0 flex-1 items-stretch" aria-label="Main">
         {items.map((it) => {
           const isActive = it.key === active;
           return (
@@ -37,7 +37,7 @@ export function MenuBar({
               type="button"
               aria-current={isActive ? "page" : undefined}
               onClick={() => onSelect(it.key)}
-              className={`px-2 font-chrome ${
+              className={`whitespace-nowrap px-2 font-chrome sm:px-2.5 ${
                 isActive ? "bg-black text-white" : "bg-white text-black"
               }`}
               style={{ fontSize: 9, letterSpacing: "0.03em" }}
@@ -47,7 +47,7 @@ export function MenuBar({
           );
         })}
       </nav>
-      {right ? <div className="ml-auto flex items-stretch">{right}</div> : null}
+      {right ? <div className="flex items-stretch">{right}</div> : null}
     </div>
   );
 }

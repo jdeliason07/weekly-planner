@@ -32,8 +32,8 @@ export function AreasEditor() {
   }
 
   return (
-    <div className="flex h-full flex-col gap-2 lg:flex-row">
-      <Window title="Areas" className="min-h-0 flex-1">
+    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto lg:flex-row lg:overflow-visible">
+      <Window title="Areas" className="shrink-0 lg:min-h-0 lg:flex-1">
         <div className="flex flex-col">
           {active.map(({ area, placedHours }, i) => (
             <AreaRow
@@ -85,8 +85,9 @@ function AreaRow({
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="border-b border-black">
-      <div className="flex items-center gap-2 p-1">
+    <div className="border-b border-black p-1.5">
+      {/* Row 1: pattern, name, rank */}
+      <div className="flex items-center gap-2">
         <span
           aria-hidden
           className="h-7 w-[10px] shrink-0 border border-black"
@@ -96,9 +97,31 @@ function AreaRow({
           value={area.name}
           onChange={(e) => store.updateArea(area.id, { name: e.target.value })}
           aria-label={`Name for ${area.name}`}
-          className="min-w-0 flex-1 border border-black bg-white px-1 py-[2px] font-prose text-black"
-          style={{ fontSize: 11 }}
+          className="min-w-0 flex-1 border border-black bg-white px-1.5 py-1 font-prose text-black"
+          style={{ fontSize: 12 }}
         />
+        <div className="flex shrink-0 flex-col gap-[2px]">
+          <MacBtn
+            disabled={isFirst}
+            onClick={() => store.moveAreaRank(area.id, -1)}
+            aria-label={`Rank ${area.name} higher`}
+            className="!px-1.5 !py-0"
+          >
+            ▲
+          </MacBtn>
+          <MacBtn
+            disabled={isLast}
+            onClick={() => store.moveAreaRank(area.id, 1)}
+            aria-label={`Rank ${area.name} lower`}
+            className="!px-1.5 !py-0"
+          >
+            ▼
+          </MacBtn>
+        </div>
+      </div>
+
+      {/* Row 2: target, type, placed, more */}
+      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-[18px]">
         <label className="flex items-center gap-1">
           <input
             type="number"
@@ -111,8 +134,8 @@ function AreaRow({
               })
             }
             aria-label={`Weekly hour target for ${area.name}`}
-            className="w-14 border border-black bg-white px-1 py-[2px] text-right font-chrome text-black"
-            style={{ fontSize: 9 }}
+            className="w-14 border border-black bg-white px-1 py-1 text-right font-chrome text-black"
+            style={{ fontSize: 10 }}
           />
           <span className="font-chrome text-black" style={{ fontSize: 8 }}>
             H/WK
@@ -130,42 +153,25 @@ function AreaRow({
         >
           {TYPE_LABEL[area.default_type]}
         </MacBtn>
-        <div className="flex flex-col">
-          <MacBtn
-            disabled={isFirst}
-            onClick={() => store.moveAreaRank(area.id, -1)}
-            aria-label={`Rank ${area.name} higher`}
-            className="!px-1 !py-0"
-          >
-            ▲
-          </MacBtn>
-          <MacBtn
-            disabled={isLast}
-            onClick={() => store.moveAreaRank(area.id, 1)}
-            aria-label={`Rank ${area.name} lower`}
-            className="!px-1 !py-0"
-          >
-            ▼
-          </MacBtn>
-        </div>
-        <MacBtn active={expanded} onClick={() => setExpanded(!expanded)}>
+        <span className="font-chrome text-black" style={{ fontSize: 8 }}>
+          {fmtHours(placedHours)}H PLACED
+        </span>
+        {area.season_end_date && (
+          <span className="font-chrome text-black" style={{ fontSize: 8 }}>
+            · ENDS {area.season_end_date.slice(5)}
+          </span>
+        )}
+        <MacBtn
+          active={expanded}
+          onClick={() => setExpanded(!expanded)}
+          className="ml-auto"
+        >
           {expanded ? "LESS" : "MORE"}
         </MacBtn>
       </div>
 
-      <div className="flex items-center justify-between px-2 pb-1">
-        <span className="font-chrome text-black" style={{ fontSize: 8 }}>
-          {fmtHours(placedHours)}/{fmtHours(area.target_hours_per_week)}H PLACED
-        </span>
-        {area.season_end_date && (
-          <span className="font-chrome text-black" style={{ fontSize: 8 }}>
-            SEASON ENDS {area.season_end_date}
-          </span>
-        )}
-      </div>
-
       {expanded && (
-        <div className="space-y-2 border-t border-black p-2">
+        <div className="mt-2 space-y-2 border-t border-black pt-2">
           <label className="block">
             <span className="font-chrome text-black" style={{ fontSize: 8 }}>
               SUCCESS LOOKS LIKE
@@ -176,7 +182,8 @@ function AreaRow({
                 store.updateArea(area.id, { success_definition: e.target.value })
               }
               rows={2}
-              className="mt-1 w-full border border-black bg-white px-1 py-1 font-prose text-black"
+              placeholder="The honest bar for this season."
+              className="mt-1 w-full border border-black bg-white px-1.5 py-1 font-prose text-black"
               style={{ fontSize: 11 }}
             />
           </label>
@@ -193,7 +200,7 @@ function AreaRow({
                     season_end_date: e.target.value || null,
                   })
                 }
-                className="border border-black bg-white px-1 py-[2px] font-prose text-black"
+                className="border border-black bg-white px-1 py-1 font-prose text-black"
                 style={{ fontSize: 10 }}
               />
             </label>
@@ -216,7 +223,7 @@ function SettingsWindow() {
   const s = store.settings;
 
   return (
-    <Window title="Settings" className="lg:w-[240px] shrink-0">
+    <Window title="Settings" className="shrink-0 lg:w-[240px]">
       <div className="space-y-3 p-2">
         <label className="block">
           <span className="font-chrome text-black" style={{ fontSize: 8 }}>

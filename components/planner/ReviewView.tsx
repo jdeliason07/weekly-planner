@@ -27,8 +27,8 @@ export function ReviewView() {
   const anyPlanned = totalPlanned > 0;
 
   return (
-    <div className="flex h-full items-start justify-center overflow-auto p-1">
-      <Window title="Weekly review" className="w-full max-w-[560px]">
+    <Window title="Weekly review" className="min-h-0 flex-1">
+      <div className="mx-auto w-full max-w-[560px]">
         {!anyPlanned ? (
           <div className="p-6">
             <p className="text-center font-prose text-black" style={{ fontSize: 12, lineHeight: 1.4 }}>
@@ -89,7 +89,7 @@ export function ReviewView() {
             </p>
           </div>
         )}
-      </Window>
-    </div>
+      </div>
+    </Window>
   );
 }

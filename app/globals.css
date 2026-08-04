@@ -8,8 +8,12 @@ body {
   background: #3b3730;
   margin: 0;
   padding: 0;
+  height: 100%;
   -webkit-font-smoothing: none;
   font-smooth: never;
+  /* App, not webpage: no rubber-band scroll of the whole chassis. */
+  overscroll-behavior: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 /* Crisp 1-bit rendering — no anti-aliased edges on the patterns. */

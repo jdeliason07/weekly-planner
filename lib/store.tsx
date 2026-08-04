@@ -94,6 +94,7 @@ type Action =
   | { t: "assistant"; actions: AssistantAction[] }
   | { t: "loadTemplate" }
   | { t: "saveToTemplate" }
+  | { t: "clearWeek" }
   | { t: "updateArea"; areaId: string; patch: Partial<Area> }
   | { t: "addArea"; name: string }
   | { t: "archiveArea"; areaId: string }
@@ -346,6 +347,8 @@ function reducer(state: State, action: Action): State {
       }));
       return { ...state, template };
     }
+    case "clearWeek":
+      return { ...state, blocks: [], selectedBlockId: null, armedAreaId: null };
     case "updateArea":
       return {
         ...state,
@@ -497,6 +500,7 @@ interface StoreValue extends State {
   applyAssistant: (actions: AssistantAction[]) => void;
   loadTemplate: () => void;
   saveToTemplate: () => void;
+  clearWeek: () => void;
   updateArea: (areaId: string, patch: Partial<Area>) => void;
   addArea: (name: string) => void;
   archiveArea: (areaId: string) => void;
@@ -603,6 +607,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     ),
     loadTemplate: useCallback(() => dispatch({ t: "loadTemplate" }), []),
     saveToTemplate: useCallback(() => dispatch({ t: "saveToTemplate" }), []),
+    clearWeek: useCallback(() => dispatch({ t: "clearWeek" }), []),
     updateArea: useCallback(
       (areaId, patch) => dispatch({ t: "updateArea", areaId, patch }),
       []

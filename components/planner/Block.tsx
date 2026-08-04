@@ -1,15 +1,16 @@
 "use client";
 
-// A placed block. White fill, 1px black border, a 7px pattern spine down the
-// left identifying the area. Open blocks use a dashed border and no spine
-// fill. Done blocks get a GREY50 overlay and a strikethrough. Unsynced blocks
-// carry a small solid black triangle in the top-right. Selection inverts the
-// whole block and flips its spine to solid white.
+// A placed block. White fill, 1px black border, with a pattern spine down the
+// left edge identifying the area. Open blocks use a dashed border and no
+// spine fill. Done blocks get a GREY50 overlay and a strikethrough. Unsynced
+// blocks carry a small solid black triangle in the top-right. Selection
+// inverts the whole block and flips its spine to solid white.
 
 import type { Area, PlannedBlock } from "@/lib/types";
 import { effectiveType } from "@/lib/types";
 import { patternStyle, GREY50 } from "@/lib/patterns";
-import { hhmmToPercent } from "@/lib/time";
+import { pxFromHHMM } from "@/lib/grid";
+import { durationHours } from "@/lib/time";
 
 export function BlockView({
   block,
@@ -24,13 +25,13 @@ export function BlockView({
 }) {
   const type = effectiveType(block, area);
   const isOpen = type === "open";
-  const top = hhmmToPercent(block.start_time);
-  const bottom = hhmmToPercent(block.end_time);
-  const height = bottom - top;
+  const top = pxFromHHMM(block.start_time);
+  const height = pxFromHHMM(block.end_time) - top;
   const done = !!block.completed_at;
   const unsynced = block.sync_state === "unsynced" && !isOpen;
   const label = block.label ?? area.name;
-  const tall = height > 6; // enough room for the time line
+  const hours = durationHours(block.start_time, block.end_time);
+  const showTime = height >= 34;
 
   return (
     <button
@@ -39,12 +40,13 @@ export function BlockView({
       aria-pressed={selected}
       className="absolute left-[2px] right-[2px] overflow-hidden text-left"
       style={{
-        top: `${top}%`,
-        height: `${height}%`,
-        minHeight: 14,
+        top,
+        height: Math.max(height, 18),
         border: isOpen ? "1px dashed #000" : "1px solid #000",
         background: selected ? "#000" : "#fff",
         color: selected ? "#fff" : "#000",
+        boxShadow: selected ? "0 0 0 2px #000" : undefined,
+        zIndex: selected ? 15 : 1,
       }}
     >
       {/* Pattern spine. Open blocks have no spine fill. Selection flips it to
@@ -54,8 +56,10 @@ export function BlockView({
           aria-hidden
           className="absolute left-0 top-0 h-full"
           style={{
-            width: 7,
-            ...(selected ? { backgroundColor: "#fff" } : patternStyle(area.pattern)),
+            width: 6,
+            ...(selected
+              ? { backgroundColor: "#fff" }
+              : patternStyle(area.pattern)),
           }}
         />
       )}
@@ -64,7 +68,7 @@ export function BlockView({
       {done && (
         <span
           aria-hidden
-          className="pointer-events-none absolute inset-0 opacity-70"
+          className="pointer-events-none absolute inset-0 opacity-60"
           style={GREY50}
         />
       )}
@@ -77,30 +81,31 @@ export function BlockView({
           style={{
             width: 0,
             height: 0,
-            borderTop: "6px solid #000",
-            borderLeft: "6px solid transparent",
+            borderTop: "7px solid #000",
+            borderLeft: "7px solid transparent",
           }}
         />
       )}
 
-      <span className="relative block pl-[10px] pr-1 pt-[1px]">
+      <span className="relative block py-[2px] pl-[10px] pr-1">
         <span
-          className="block truncate font-prose"
+          className="block truncate font-prose font-medium"
           style={{
-            fontSize: 9,
-            lineHeight: 1.1,
+            fontSize: 11,
+            lineHeight: "13px",
             textDecoration: done ? "line-through" : "none",
           }}
         >
           {label}
-          {isOpen ? " (open)" : ""}
         </span>
-        {tall && (
+        {showTime && (
           <span
             className="block font-chrome"
-            style={{ fontSize: 8, opacity: 0.85 }}
+            style={{ fontSize: 8, lineHeight: "12px", opacity: 0.8 }}
           >
             {block.start_time}
+            {hours >= 1 ? ` · ${hours % 1 === 0 ? hours : hours.toFixed(1)}H` : ""}
+            {isOpen ? " · OPEN" : ""}
           </span>
         )}
       </span>
